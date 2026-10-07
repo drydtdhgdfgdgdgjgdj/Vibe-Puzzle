@@ -26,6 +26,24 @@ const { createAudioStore } = require('./lib/audio');
 const { migrateDatabase } = require('./lib/migrate');
 
 const PRESET_PATH_RE = /^\/[\w\-./]+\.(jpe?g|png|webp|gif|avif)$/i;
+const MUSIC_FILE_RE = /^[a-z0-9]+-music-[0-9a-f]+\.(mp3|ogg|m4a|aac|wav|flac|webm)$/i;
+const RATE_WINDOW_MS = 60 * 60 * 1000;
+
+// Garde-fous anti-abus (site public). Les valeurs par défaut sont celles du
+// site en ligne ; les tests en passent de plus petites via `limits`.
+const DEFAULT_LIMITS = {
+  roomsPerHour: 40, // créations de partie, par adresse IP
+  backgroundsPerHour: 40, // fonds perso envoyés, par adresse IP
+  musicPerHour: 20, // musiques envoyées, par adresse IP
+  joinRequestsPerHour: 200, // demandes pour rejoindre une partie, par adresse IP
+  pendingRequestsPerRoom: 50, // demandes en attente en même temps dans une partie
+  minFreeDiskBytes: 1024 ** 3, // sous 1 Go libre, plus aucun nouveau fichier accepté
+  orphanMusicMs: 24 * 60 * 60 * 1000, // musique envoyée mais jamais utilisée : supprimée après 24 h
+};
+
+function isLoopback(address) {
+  return address === '::1' || /^(::ffff:)?127\./.test(address || '');
+}
 
 function clampInt(value, min, max) {
   const n = Math.round(Number(value));
@@ -38,7 +56,9 @@ function createPuzzleServer({
   // par défaut : un dossier de données personnalisé ne la touche jamais.
   legacyDbFile = process.env.PUZZLE_DATA_DIR ? null : path.join(__dirname, 'database.json'),
   log = console,
+  limits = {},
 } = {}) {
+  const LIMITS = { ...DEFAULT_LIMITS, ...limits };
   const store = createStore({ dataDir, legacyDbFile, log });
   const images = createImageStore(store.uploadsDir);
   const audio = createAudioStore(store.uploadsDir);
@@ -56,18 +76,51 @@ function createPuzzleServer({
   // machine : on lui fait confiance pour l'adresse IP réelle des joueurs.
   app.set('trust proxy', 'loopback');
   app.use(cors());
-  app.use(express.json({ limit: '60mb' }));
   app.use('/uploads', express.static(store.uploadsDir, { maxAge: '30d', immutable: true, fallthrough: false }));
+
+  // Corps des requêtes : jusqu'à 60 Mo seulement là où l'on envoie des
+  // fichiers (image, fond, musique) ; quelques Ko suffisent partout ailleurs.
+  const uploadJson = express.json({ limit: '60mb' });
+  const smallJson = express.json({ limit: '100kb' });
 
   // Garde-fou anti-abus (site public) : nombre d'actions par adresse IP et par heure.
   const rateLog = new Map();
-  function rateLimited(key, max, windowMs = 60 * 60 * 1000) {
+  function rateLimited(key, max) {
     const now = Date.now();
-    const recent = (rateLog.get(key) || []).filter((t) => now - t < windowMs);
+    const recent = (rateLog.get(key) || []).filter((t) => now - t < RATE_WINDOW_MS);
     const limited = recent.length >= max;
     if (!limited) recent.push(now);
     rateLog.set(key, recent);
     return limited;
+  }
+
+  // Les adresses qui ne reviennent pas sont oubliées : sinon la table grossit sans fin.
+  function pruneRateLog(now = Date.now()) {
+    for (const [key, times] of rateLog) {
+      const recent = times.filter((t) => now - t < RATE_WINDOW_MS);
+      if (recent.length) rateLog.set(key, recent);
+      else rateLog.delete(key);
+    }
+  }
+  const pruneTimer = setInterval(pruneRateLog, 10 * 60 * 1000);
+  pruneTimer.unref?.();
+
+  // Envois de fichiers : comptés AVANT de lire le corps (jusqu'à 60 Mo), pour
+  // qu'une adresse qui abuse soit refusée sans que le serveur lise ses envois.
+  function perIpLimit(kind, max, error) {
+    return (req, res, next) => (rateLimited(`${kind}:${req.ip}`, max) ? res.status(429).json({ error }) : next());
+  }
+
+  // Place libre sur le disque des envois (la base y vit aussi) : sous le
+  // seuil, les nouveaux fichiers sont refusés plutôt que de remplir le disque.
+  const DISK_FULL_ERROR = 'Le serveur manque de place pour de nouveaux fichiers : réessaie plus tard.';
+  function diskAlmostFull() {
+    try {
+      const s = fs.statfsSync(store.uploadsDir);
+      return s.bavail * s.bsize < LIMITS.minFreeDiskBytes;
+    } catch {
+      return false; // mesure impossible sur ce système : on ne bloque rien
+    }
   }
 
   const server = http.createServer(app);
@@ -129,6 +182,50 @@ function createPuzzleServer({
 
   function onlineClientIds(roomId) {
     return new Set(socketsInRoom(roomId).map((s) => s.data?.clientId));
+  }
+
+  // Adresse IP réelle d'un joueur en temps réel. Derrière Caddy (même
+  // machine), la connexion vient de 127.0.0.1 et l'adresse du joueur est dans
+  // X-Forwarded-For : même règle que `trust proxy` pour l'API HTTP.
+  function socketIp(socket) {
+    const address = socket.handshake?.address || '';
+    const forwarded = socket.handshake?.headers?.['x-forwarded-for'];
+    if (isLoopback(address) && typeof forwarded === 'string') {
+      const hops = forwarded.split(',').map((s) => s.trim()).filter(Boolean);
+      for (let i = hops.length - 1; i >= 0; i--) if (!isLoopback(hops[i])) return hops[i];
+    }
+    return address || 'inconnue';
+  }
+
+  // ---------- Demandes pour rejoindre ----------
+  // Un onglet n'attend qu'à une seule porte à la fois : sa demande en
+  // attente (s'il en a une) est retirée quand il en fait une autre, entre
+  // dans une partie, annule ou se déconnecte.
+  function dropPendingRequest(socket) {
+    const roomId = socket.data?.pendingRoomId;
+    const requestId = socket.data?.pendingRequestId;
+    const room = roomId && db[roomId];
+    if (room && R.ownValue(room.pendingRequests, requestId)) {
+      delete room.pendingRequests[requestId];
+      for (const s of staffSockets(roomId)) s.emit('join_request_closed', { requestId });
+      store.markDirty();
+    }
+    if (socket.data) {
+      socket.data.pendingRoomId = null;
+      socket.data.pendingRequestId = null;
+    }
+  }
+
+  // Demandes dont l'onglet n'attend plus (parti, ou entré ailleurs) : retirées.
+  function purgeStaleRequests(roomId) {
+    const room = db[roomId];
+    for (const [requestId, req] of Object.entries(room.pendingRequests)) {
+      const s = io.sockets.sockets.get(req.socketId);
+      if (s && s.data?.pendingRoomId === roomId && s.data.pendingRequestId === requestId) continue;
+      delete room.pendingRequests[requestId];
+      for (const staff of staffSockets(roomId)) staff.emit('join_request_closed', { requestId });
+      store.markDirty();
+    }
   }
 
   function getPlayers(roomId) {
@@ -384,6 +481,7 @@ function createPuzzleServer({
     if (!room) return;
     const clientId = socket.data.clientId;
     releaseHolds(roomId, socket);
+    rt(roomId).lastPing.delete(socket.id);
     socket.to(roomId).emit('player_left', { socketId: socket.id });
     if (socketsOfClient(roomId, clientId).length === 0) {
       clearHint(roomId, clientId);
@@ -402,6 +500,7 @@ function createPuzzleServer({
   function admit(socket, roomId, clientId, { resume }) {
     const room = db[roomId];
     const member = room.members[clientId];
+    dropPendingRequest(socket);
     // Même joueur ouvert dans un autre onglet : l'ancien onglet cède la place.
     for (const s of socketsOfClient(roomId, clientId)) {
       if (s.id !== socket.id) { s.emit('session_replaced'); detachSocket(s, 'replaced'); }
@@ -426,12 +525,12 @@ function createPuzzleServer({
   // ============================================================
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-  app.post(['/api/rooms', '/create-room'], (req, res) => {
+  const createLimit = perIpLimit('create', LIMITS.roomsPerHour, 'Trop de parties créées en peu de temps : réessaie dans un moment.');
+  app.post(['/api/rooms', '/create-room'], createLimit, uploadJson, (req, res) => {
     try {
       const b = req.body || {};
       const clientId = R.cleanClientId(b.creatorClientId);
       if (!clientId) return res.status(400).json({ error: 'creatorClientId manquant' });
-      if (rateLimited(`create:${req.ip}`, 40)) return res.status(429).json({ error: 'Trop de parties créées en peu de temps : réessaie dans un moment.' });
       const cols = clampInt(b.cols, 2, 60);
       const rows = clampInt(b.rows, 2, 60);
       if (cols * rows > C.MAX_PIECES) return res.status(400).json({ error: 'Trop de pièces' });
@@ -443,12 +542,17 @@ function createPuzzleServer({
 
       const roomId = R.newRoomId(db);
       const source = b.originalImage || b.originalImageUrl || b.image || b.imageUrl;
+      // Disque presque plein : une image envoyée est refusée ; une image du
+      // site marche encore, sans miniature (la grande image en tient lieu).
+      const diskFull = diskAlmostFull();
       let originalImageUrl;
-      if (images.isDataUrl(source)) originalImageUrl = images.save(source, `${roomId}-orig`);
-      else if (typeof source === 'string' && PRESET_PATH_RE.test(source) && !source.includes('..')) originalImageUrl = source;
+      if (images.isDataUrl(source)) {
+        if (diskFull) return res.status(503).json({ error: DISK_FULL_ERROR });
+        originalImageUrl = images.save(source, `${roomId}-orig`);
+      } else if (typeof source === 'string' && PRESET_PATH_RE.test(source) && !source.includes('..')) originalImageUrl = source;
       else return res.status(400).json({ error: 'Image manquante ou invalide' });
       let thumbUrl = originalImageUrl;
-      if (images.isDataUrl(b.thumb)) {
+      if (!diskFull && images.isDataUrl(b.thumb)) {
         try { thumbUrl = images.save(b.thumb, `${roomId}-thumb`); } catch { /* miniature facultative */ }
       }
 
@@ -513,7 +617,7 @@ function createPuzzleServer({
     }
   });
 
-  app.post('/api/my-rooms', (req, res) => {
+  app.post('/api/my-rooms', smallJson, (req, res) => {
     const clientId = R.cleanClientId(req.body?.clientId);
     if (!clientId) return res.json({ rooms: [] });
     const rooms = [];
@@ -526,7 +630,7 @@ function createPuzzleServer({
     res.json({ rooms });
   });
 
-  app.post('/api/rooms/:id/delete', (req, res) => {
+  app.post('/api/rooms/:id/delete', smallJson, (req, res) => {
     const roomId = R.cleanRoomId(req.params.id);
     const room = db[roomId];
     if (!room) return res.status(404).json({ error: 'Partie introuvable' });
@@ -548,7 +652,7 @@ function createPuzzleServer({
     res.json({ ok: true });
   });
 
-  app.post('/api/rooms/:id/forget', (req, res) => {
+  app.post('/api/rooms/:id/forget', smallJson, (req, res) => {
     const roomId = R.cleanRoomId(req.params.id);
     const room = db[roomId];
     if (!room) return res.status(404).json({ error: 'Partie introuvable' });
@@ -566,14 +670,15 @@ function createPuzzleServer({
     res.json({ ok: true });
   });
 
-  app.post('/api/rooms/:id/background', (req, res) => {
+  const backgroundLimit = perIpLimit('bg', LIMITS.backgroundsPerHour, 'Trop d’envois en peu de temps : réessaie dans un moment.');
+  app.post('/api/rooms/:id/background', backgroundLimit, uploadJson, (req, res) => {
     const roomId = R.cleanRoomId(req.params.id);
     const room = db[roomId];
     if (!room) return res.status(404).json({ error: 'Partie introuvable' });
     const clientId = R.cleanClientId(req.body?.clientId);
     const member = clientId && room.members[clientId];
     if (!R.isActiveMember(member) || !R.isStaffRole(member.role)) return res.status(403).json({ error: "Seul l'hôte peut changer le fond." });
-    if (rateLimited(`bg:${req.ip}`, 40)) return res.status(429).json({ error: 'Trop d’envois en peu de temps : réessaie dans un moment.' });
+    if (diskAlmostFull()) return res.status(503).json({ error: DISK_FULL_ERROR });
     try {
       const url = images.save(req.body?.image, `${roomId}-bg`);
       images.removeUrl(room.settings.customBackgroundUrl);
@@ -589,14 +694,15 @@ function createPuzzleServer({
 
   // Musique perso envoyée par un joueur. Tout membre peut envoyer : pour un
   // invité, le fichier sert ensuite à une proposition que l'hôte accepte ou non.
-  app.post('/api/rooms/:id/music', (req, res) => {
+  const musicLimit = perIpLimit('music', LIMITS.musicPerHour, 'Trop d’envois en peu de temps : réessaie dans un moment.');
+  app.post('/api/rooms/:id/music', musicLimit, uploadJson, (req, res) => {
     const roomId = R.cleanRoomId(req.params.id);
     const room = db[roomId];
     if (!room) return res.status(404).json({ error: 'Partie introuvable' });
     const clientId = R.cleanClientId(req.body?.clientId);
     const member = clientId && room.members[clientId];
     if (!R.isActiveMember(member)) return res.status(403).json({ error: 'Rejoins la partie pour envoyer une musique.' });
-    if (rateLimited(`music:${req.ip}`, 20)) return res.status(429).json({ error: 'Trop d’envois en peu de temps : réessaie dans un moment.' });
+    if (diskAlmostFull()) return res.status(503).json({ error: DISK_FULL_ERROR });
     try {
       const url = audio.save(req.body?.audio, `${roomId}-music`);
       // `apply` (hôte) : la musique devient tout de suite celle de la partie
@@ -686,11 +792,23 @@ function createPuzzleServer({
       }
 
       if (R.isPseudoTaken(room, pseudo, clientId)) { socket.emit('join_error', { reason: 'pseudo_taken' }); return; }
+      if (rateLimited(`join:${socketIp(socket)}`, LIMITS.joinRequestsPerHour)) {
+        socket.emit('join_error', { reason: 'too_many_requests' });
+        return;
+      }
+      dropPendingRequest(socket);
       for (const [requestId, reqData] of Object.entries(room.pendingRequests)) {
         if (reqData.clientId === clientId) {
           delete room.pendingRequests[requestId];
           for (const s of staffSockets(roomId)) s.emit('join_request_closed', { requestId });
         }
+      }
+      // File d'attente pleine : on retire d'abord les demandes périmées.
+      if (Object.keys(room.pendingRequests).length >= LIMITS.pendingRequestsPerRoom) purgeStaleRequests(roomId);
+      if (Object.keys(room.pendingRequests).length >= LIMITS.pendingRequestsPerRoom) {
+        socket.emit('join_error', { reason: 'too_many_requests' });
+        store.markDirty();
+        return;
       }
       if (socket.data?.roomId) detachSocket(socket, 'leave');
       const requestId = crypto.randomUUID();
@@ -704,24 +822,13 @@ function createPuzzleServer({
       store.markDirty();
     });
 
-    on('cancel_join', () => {
-      const roomId = socket.data?.pendingRoomId;
-      const requestId = socket.data?.pendingRequestId;
-      const room = roomId && db[roomId];
-      if (room && room.pendingRequests[requestId]) {
-        delete room.pendingRequests[requestId];
-        for (const s of staffSockets(roomId)) s.emit('join_request_closed', { requestId });
-        store.markDirty();
-      }
-      socket.data.pendingRoomId = null;
-      socket.data.pendingRequestId = null;
-    });
+    on('cancel_join', () => dropPendingRequest(socket));
 
     on('respond_join', ({ roomId, requestId, accepted }) => {
       const ctx = getCtx(roomId);
       if (!ctx || !R.isStaffRole(ctx.member.role)) return;
       const { room } = ctx;
-      const reqData = room.pendingRequests[requestId];
+      const reqData = R.ownValue(room.pendingRequests, requestId);
       if (!reqData) { socket.emit('join_request_closed', { requestId }); return; }
       delete room.pendingRequests[requestId];
       for (const s of staffSockets(ctx.roomId)) if (s.id !== socket.id) s.emit('join_request_closed', { requestId });
@@ -763,7 +870,7 @@ function createPuzzleServer({
       releaseHolds(ctx.roomId, socket);
       let blockedBy = null;
       for (const id of pieceIds) {
-        const p = room.pieces[id];
+        const p = R.ownValue(room.pieces, id);
         if (!p || p.focusOwner || p.groupId === C.LOCKED) { blockedBy = blockedBy || 'invalid'; break; }
         const holder = r.held.get(id);
         if (holder && holder !== socket.id) { blockedBy = holder; break; }
@@ -806,7 +913,7 @@ function createPuzzleServer({
       const newlyLocked = [];
       const touched = new Set();
       for (const u of Array.isArray(updates) ? updates.slice(0, C.MAX_PIECES) : []) {
-        const p = u && room.pieces[u.id];
+        const p = u && R.ownValue(room.pieces, u.id);
         if (!p) continue;
         const holder = r.held.get(u.id);
         if (p.focusOwner || p.groupId === C.LOCKED || (holder && holder !== socket.id)) { rejected.push(u.id); continue; }
@@ -1016,7 +1123,7 @@ function createPuzzleServer({
       const ctx = getCtx(roomId);
       if (!ctx) return;
       const { room, r, clientId, member } = ctx;
-      const piece = room.pieces[pieceId];
+      const piece = R.ownValue(room.pieces, pieceId);
       const lvl = Math.round(Number(level));
       if (!piece || piece.groupId === C.LOCKED || !(lvl >= 1 && lvl <= 3)) return;
       const inFocus = context === 'focus';
@@ -1164,7 +1271,7 @@ function createPuzzleServer({
       const newlyLocked = [];
       const touched = new Set();
       for (const u of Array.isArray(updates) ? updates.slice(0, C.MAX_PIECES) : []) {
-        const p = u && room.pieces[u.id];
+        const p = u && R.ownValue(room.pieces, u.id);
         if (!p || p.focusOwner !== clientId || p.groupId === lid) continue;
         if (!R.finite(u.x) || !R.finite(u.y)) continue;
         let gid = R.cleanGroupId(u.groupId) || p.groupId;
@@ -1202,13 +1309,7 @@ function createPuzzleServer({
     // ---------- Déconnexion ----------
     socket.on('disconnect', () => {
       try {
-        const pendingRoomId = socket.data?.pendingRoomId;
-        const pendingRequestId = socket.data?.pendingRequestId;
-        const pendingRoom = pendingRoomId && db[pendingRoomId];
-        if (pendingRoom && pendingRoom.pendingRequests[pendingRequestId]) {
-          delete pendingRoom.pendingRequests[pendingRequestId];
-          for (const s of staffSockets(pendingRoomId)) s.emit('join_request_closed', { requestId: pendingRequestId });
-        }
+        dropPendingRequest(socket);
         if (socket.data?.roomId) detachSocket(socket, 'disconnect');
       } catch (err) {
         log.error('[socket disconnect]', err);
@@ -1221,18 +1322,54 @@ function createPuzzleServer({
     for (const clientId of Object.keys(room.focuses || {})) scheduleFocusGrace(roomId, clientId);
   }
 
+  // ============================================================
+  // Musiques envoyées puis jamais adoptées (proposition refusée, oubliée,
+  // remplacée...) : supprimées après un délai, sauf si une partie ou une
+  // demande de réglage en cours s'en sert encore. Les images ne sont pas
+  // concernées : elles partent avec leur partie.
+  // ============================================================
+  function sweepOrphanMusic(now = Date.now()) {
+    const used = new Set();
+    const keep = (music) => {
+      if (typeof music?.url === 'string') used.add(path.basename(music.url.split(/[?#]/)[0]));
+    };
+    for (const room of Object.values(db)) keep(room?.settings?.customMusic);
+    for (const r of runtimes.values()) for (const req of r.settingsRequests.values()) keep(req.partial?.customMusic);
+    let files = [];
+    try { files = fs.readdirSync(store.uploadsDir); } catch { return 0; }
+    let removed = 0;
+    for (const file of files) {
+      if (!MUSIC_FILE_RE.test(file) || used.has(file)) continue;
+      const full = path.join(store.uploadsDir, file);
+      try {
+        if (now - fs.statSync(full).mtimeMs < LIMITS.orphanMusicMs) continue;
+        fs.unlinkSync(full);
+        removed++;
+      } catch { /* déjà supprimé */ }
+    }
+    if (removed) log.log(`${removed} musique(s) jamais utilisée(s) supprimée(s).`);
+    return removed;
+  }
+  const firstSweep = setTimeout(sweepOrphanMusic, 5 * 60 * 1000);
+  firstSweep.unref?.();
+  const sweepTimer = setInterval(sweepOrphanMusic, 60 * 60 * 1000);
+  sweepTimer.unref?.();
+
   function listen(port, host) {
     return new Promise((resolve) => server.listen(port, host, () => resolve(server.address().port)));
   }
 
   async function close() {
+    clearInterval(pruneTimer);
+    clearTimeout(firstSweep);
+    clearInterval(sweepTimer);
     for (const roomId of [...runtimes.keys()]) disposeRuntime(roomId);
     io.close();
     await new Promise((resolve) => server.close(() => resolve()));
     await store.flushNow();
   }
 
-  return { app, server, io, db, store, listen, close };
+  return { app, server, io, db, store, listen, close, sweepOrphanMusic };
 }
 
 if (require.main === module) {

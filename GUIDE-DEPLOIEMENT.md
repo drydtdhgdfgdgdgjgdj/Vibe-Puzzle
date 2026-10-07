@@ -242,9 +242,9 @@ Tu recevras un e-mail si le site ne répond plus, et un autre quand il revient. 
 
 **Bon à savoir**
 - **Nouvelles radios, musiques et fonds** : déclare-les dans `config.js` (et dépose les fichiers dans `puzzle-frontend/public/`), voir GUIDE-MEDIAS.md. Ensuite, mêmes étapes 2 à 5. GitHub refuse les fichiers de plus de 100 Mo : compresse les vidéos.
-- **Les MP3 envoyés par les joueurs** pendant une partie vont directement sur le serveur (`puzzle-data/uploads`), pas dans git. Ils partent avec la partie quand elle est supprimée.
+- **Les MP3 envoyés par les joueurs** pendant une partie vont directement sur le serveur (`puzzle-data/uploads`), pas dans git. Ils partent avec la partie quand elle est supprimée. Un MP3 envoyé mais jamais utilisé (proposition refusée, par exemple) est supprimé tout seul au bout de 24 h.
 - **Voir ce qui se passe sur le serveur** : `ssh puzzle`, puis `journalctl -u puzzle -f` pour suivre le journal en direct (Ctrl+C pour quitter). Les visites sont dans `/var/log/caddy/puzzle.log`.
-- **Place sur le disque** : `ssh puzzle "df -h / && du -sh ~/puzzle-data ~/sauvegardes"`.
+- **Place sur le disque** : `ssh puzzle "df -h / && du -sh ~/puzzle-data ~/sauvegardes"`. Sous **1 Go libre**, le jeu refuse les nouvelles photos, fonds et MP3 (message « Le serveur manque de place… ») pour ne jamais remplir le disque ; les parties et les images du site marchent toujours. Libère de la place (vieilles sauvegardes) pour que les envois reprennent.
 - **Annuler une mise à jour ratée** : sur ton PC, `git revert HEAD`, puis `git push`, puis l'étape 4.
 - **Vider les parties en ligne** (rarement utile) :
   `ssh puzzle "sudo systemctl stop puzzle && cd ~/Vibe-Puzzle && PUZZLE_DATA_DIR=~/puzzle-data npm run vider-parties && sudo systemctl start puzzle"`
