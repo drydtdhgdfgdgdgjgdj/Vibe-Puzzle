@@ -260,7 +260,7 @@ export class PuzzleEngine {
       const [bx, by] = this.pieceBox(p);
       this.main.addPiece({
         id, c: p.c, r: p.r, shape: p.shape, x: p.x, y: p.y, groupId: p.groupId,
-        tx: this.frame.x + bx * pw, ty: this.frame.y + by * ph,
+        tx: this.frame.x + bx * pw, ty: this.frame.y + by * ph, box: this.pieceBox(p),
         ...this.pieceSize(p), adj: this.neighborIds(p),
         isEdge: this.isEdgePiece(p),
         hidden: !!p.focus,
@@ -973,7 +973,7 @@ export class PuzzleEngine {
       scene.addPiece({
         id, c: p.c, r: p.r, shape: p.shape,
         x: p.fx ?? 0, y: p.fy ?? 0, groupId: p.groupId,
-        tx: (bx - c0) * pw, ty: (by - r0) * ph,
+        tx: (bx - c0) * pw, ty: (by - r0) * ph, box: this.pieceBox(p),
         ...this.pieceSize(p), adj: this.neighborIds(p), isEdge: this.isEdgePiece(p),
       });
     }
@@ -985,7 +985,7 @@ export class PuzzleEngine {
       const tx = (bx - c0) * pw;
       const ty = (by - r0) * ph;
       scene.addPiece({
-        id, c: mp.c, r: mp.r, shape: mp.shape || p.shape, x: tx, y: ty, groupId: lockedGroupId || 'CONTEXT', tx, ty,
+        id, c: mp.c, r: mp.r, shape: mp.shape || p.shape, x: tx, y: ty, groupId: lockedGroupId || 'CONTEXT', tx, ty, box: this.pieceBox(p),
         ...this.pieceSize(p), adj: this.neighborIds(p), context: true,
       });
     }

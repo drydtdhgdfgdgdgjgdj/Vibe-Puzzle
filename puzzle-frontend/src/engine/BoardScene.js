@@ -147,7 +147,7 @@ export class BoardScene {
   // Construction
   // ============================================================
   addPiece({
-    id, c, r, shape, x, y, groupId, tx, ty,
+    id, c, r, shape, x, y, groupId, tx, ty, box = null,
     w = this.metrics.pw, h = this.metrics.ph, adj = [], isEdge = false, hidden = false, context = false,
   }) {
     const tex = this.atlas.textures.get(id);
@@ -160,7 +160,7 @@ export class BoardScene {
     sprite.hitArea = pieceHitArea(shape, this.metrics, this.atlas);
     sprite.cursor = 'pointer';
     const piece = {
-      id, c, r, shape, x, y, w, h, adj, groupId, tx, ty, isEdge, hidden, context,
+      id, c, r, shape, x, y, w, h, box, adj, groupId, tx, ty, isEdge, hidden, context,
       sprite, shadow, heldBy: null, lifted: false, dispX: x, dispY: y, tween: null,
     };
     sprite.on('pointerdown', (e) => this.onPiecePointerDown(piece, e));
@@ -821,20 +821,20 @@ export class BoardScene {
 
   showHintCandidates(candidates, onPick) {
     this.clearHintOverlays();
-    const { pw, ph, ts, unit } = this.metrics;
+    const { pw, ph, unit } = this.metrics;
     for (const cand of candidates) {
       const q = this.pieces.get(cand.pieceId);
       const g = new PIXI.Graphics();
       g.lineStyle(Math.max(1.5, unit * 0.035), ACCENT, 0.9);
       g.beginFill(ACCENT, 0.14);
-      if (q?.shape?.cut === 'magic') {
-        // Pièce magique : sa vraie silhouette, à sa place.
-        tracePiecePath(g, q.shape, pw, ph, ts);
-        g.closePath();
-      } else {
-        const inset = unit * 0.06;
-        g.drawRoundedRect(inset, inset, pw - 2 * inset, ph - 2 * inset, unit * 0.14);
-      }
+      // Toujours un simple rectangle d'une case : ni la forme ni la taille
+      // de la pièce ne se devinent (c'est le niveau 1 de l'aide qui les
+      // montre). Pièce magique : posé sur sa première case, qui lui
+      // appartient forcément (le rectangle part du coin de son cadre).
+      const inset = unit * 0.06;
+      const ox = q?.box ? (q.c - q.box[0]) * pw : 0;
+      const oy = q?.box ? (q.r - q.box[1]) * ph : 0;
+      g.drawRoundedRect(ox + inset, oy + inset, pw - 2 * inset, ph - 2 * inset, unit * 0.14);
       g.endFill();
       g.eventMode = 'static';
       g.cursor = 'pointer';
