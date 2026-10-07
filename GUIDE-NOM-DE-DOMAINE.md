@@ -71,6 +71,7 @@ Onglet **Advanced DNS** → partie **Host Records** :
 1. **Supprime** les enregistrements par défaut, avec la corbeille à droite de chaque ligne. En général, il y a :
    - un `CNAME Record` `www` → `parkingpage.namecheap.com.`
    - un `URL Redirect Record` `@` → `http://www.ton-domaine.me/`
+   - si tu as choisi « GitHub Pages » lors de la réservation sur nc.me : 4 `A Record` `@` vers `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`, et un `CNAME Record` `www` vers `ton-pseudo.github.io.`
 2. **Ajoute** ces deux lignes avec **Add new record** :
 
 | Type | Host | Value | TTL |

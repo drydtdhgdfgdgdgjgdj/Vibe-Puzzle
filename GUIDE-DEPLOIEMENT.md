@@ -64,7 +64,8 @@ Suis les parties 1 à 3 de **GUIDE-NOM-DE-DOMAINE.md** (choix du nom, réservati
 ### A3. Créer la machine (portail Azure)
 https://portal.azure.com, puis **Machines virtuelles**, **Créer**, **Machine virtuelle Azure** :
 - Abonnement : **Azure for Students**. Groupe de ressources : nouveau, `puzzle`.
-- Nom : `puzzle`. Région : **France Central** ou **West Europe** (proche des joueurs, donc peu de latence). Si une région est refusée, essaie l'autre.
+- Nom : `puzzle`. **Région : uniquement une région autorisée pour ton abonnement étudiant**, sinon la validation échoue avec `RequestDisallowedByAzure` ou la taille affiche `NotAvailableForSubscription`. Pour connaître la liste : barre de recherche du portail → **Stratégie** → **Affectations** → **Allowed resource deployment regions** → **Afficher l'affectation** → **Paramètres**. Prends une région européenne de cette liste (proche des joueurs, donc peu de latence).
+- Options de disponibilité : **Aucune redondance d'infrastructure requise**.
 - Image : **Ubuntu Server 24.04 LTS – x64 Gen2**.
 - Taille : une taille marquée **« éligible aux services gratuits »** (B1s ou B2ats v2).
 - Authentification : **clé publique SSH**. Utilisateur : `azureuser`. Choisis « Générer une nouvelle paire de clés », nom de la clé : `puzzle`.
