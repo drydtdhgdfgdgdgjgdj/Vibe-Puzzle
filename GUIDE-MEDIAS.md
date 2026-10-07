@@ -57,7 +57,7 @@ Les fonds se déclarent dans `config.js`, liste `BACKGROUNDS`.
 | Couleur / dégradé | `{ type: 'color', value: 'linear-gradient(160deg, #0f0c29, #302b63)' }` | Aucun coût |
 | Animé intégré | Aurore, Ciel étoilé, Dégradé vivant, **Pluie** (déjà présents) | Aucun fichier, net en 4K, très léger |
 | Image | fichier dans `public/fonds/foret.jpg` + `{ type: 'image', value: '/fonds/foret.jpg' }` | 3840 px de large pour la 4K |
-| Vidéo | fichier dans `public/fonds/pluie.mp4` + `{ type: 'video', value: '/fonds/pluie.mp4', poster: '/fonds/pluie.jpg' }` | Muette, en boucle |
+| Vidéo | `npm run medias` (voir ci-dessous) + `video('pluie', 'Pluie')` | Muette, en boucle, avec vignette |
 
 L'hôte peut aussi utiliser **sa propre photo** : Réglages → Room → « Mettre ma photo en fond ». Elle est réduite à 3840 px (4K) maximum et partagée avec tout le monde.
 
@@ -71,7 +71,7 @@ Une **vidéo** reste plus réaliste (vraies gouttes, reflets, flou). Elle est to
 
 Oui, c'est possible.
 - **Fonds animés intégrés** : ils sont calculés par le navigateur à la résolution de l'écran, donc nets en 4K sans fichier. Ils coûtent très peu, car seuls des déplacements et des fondus sont animés.
-- **Vidéo 4K** : elle est décodée par la carte graphique (H.264, H.265 ou AV1) et un PC récent la lit sans peine. Ce qui coûte vraiment, c'est le poids du fichier (envoyé à chaque joueur depuis ton PC) et un peu de mémoire graphique.
+- **Vidéo 4K** : elle est décodée par la carte graphique (H.264, H.265 ou AV1) et un PC récent la lit sans peine. Ce qui coûte vraiment, c'est le poids du fichier (envoyé à chaque joueur depuis le serveur) et un peu de mémoire graphique.
 
 Conseils pour une vidéo de fond :
 - une boucle de 10 à 30 s, à 30 images/s, sans piste son, entre 8 et 15 Mb/s ;
@@ -80,24 +80,27 @@ Conseils pour une vidéo de fond :
 - choisis une boucle qui se referme proprement, sinon on voit le raccord ;
 - où en trouver gratuitement : Pexels Videos, Pixabay, Coverr (libres d'usage, vérifie la licence).
 
-**ffmpeg n'est pas installé sur ton PC.** Pour l'ajouter, dans PowerShell :
-```powershell
-winget install Gyan.FFmpeg
-```
-Referme puis rouvre le terminal, et vérifie avec `ffmpeg -version`.
+### Ajouter des images de puzzle ou des vidéos de fond (méthode simple)
 
-Commandes [ffmpeg](https://ffmpeg.org) utiles :
+1. Dépose les fichiers **tels quels** à la racine du projet, dans :
+   - `medias-originaux/puzzles/` pour les **images de puzzle** (.jpg, .png, .webp) ;
+   - `medias-originaux/fonds/` pour les **vidéos de fond** (.mp4, .mov, .webm…). Optionnel : une **capture** du même nom en `.png` ou `.jpg` (par exemple `Pluie.mp4` + `Pluie.png`), qui sert d'image de chargement et de vignette. Sans capture, la 1re image de la vidéo est utilisée.
 
-```bash
-# Boucle 4K de 20 s, compatible avec tous les navigateurs
-ffmpeg -i source.mp4 -t 20 -vf "scale=3840:-2,fps=30" -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart -an public/fonds/pluie-4k.mp4
+   Le nom du fichier importe peu (espaces et accents compris) : il devient le nom affiché.
+2. À la racine du projet : `npm run medias`. Le script crée dans `puzzle-frontend/public/` :
+   - `puzzles/<id>.jpg`, réduite à **4096 px** maximum. C'est la même limite que pour les photos envoyées par les joueurs : au-delà, certains téléphones n'arrivent plus à découper l'image. Il crée aussi `puzzles/<id>-mini.jpg`, la vignette du carrousel d'accueil, pour que l'accueil ne télécharge pas toutes les images en grand ;
+   - `fonds/<id>.mp4` : 1080p maximum, 30 images/s maximum, **sans son**, qui démarre avant la fin du téléchargement. Une vidéo 4K de 50 Mo descend en général à 4-8 Mo, et au-delà de 25 Mo le script recompresse plus fort. Il crée aussi `fonds/<id>.jpg` (l'image de chargement) et `fonds/<id>-mini.jpg` (la vignette du sélecteur).
+3. Il affiche à la fin les lignes à coller dans `puzzle-frontend/src/config.js` :
+   - `puzzle('vague-de-kanagawa', 'Vague de Kanagawa'),` dans `PRESET_IMAGES` ;
+   - `video('foret-sous-la-pluie', 'Forêt sous la pluie'),` dans `BACKGROUNDS`.
 
-# Version 1440p, plus légère
-ffmpeg -i source.mp4 -t 20 -vf "scale=2560:-2,fps=30" -c:v libx264 -preset slow -crf 22 -pix_fmt yuv420p -movflags +faststart -an public/fonds/pluie-1440p.mp4
+   Le texte entre guillemets est le nom affiché, tu peux le changer. L'ordre des lignes est l'ordre d'affichage.
+4. Teste en local, puis `git add -A`, `git commit`, `git push` et la mise à jour du serveur (GUIDE-DEPLOIEMENT.md, partie B).
 
-# Image affichée pendant le chargement (poster)
-ffmpeg -i public/fonds/pluie-4k.mp4 -frames:v 1 -q:v 3 public/fonds/pluie.jpg
-```
+Les originaux restent dans `medias-originaux/`, qui est exclu de git : ils ne partent ni sur GitHub ni sur le serveur. Si tu relances le script, les fichiers déjà prêts sont sautés.
+**Ne dépose pas les originaux directement dans `public/`** : les noms avec espaces sont refusés par le serveur au lancement d'une partie, et les fichiers trop lourds (plus de 100 Mo) bloquent le `git push`.
+
+ffmpeg est fourni par le projet (`ffmpeg-static`, installé avec `npm install`) : rien d'autre à installer.
 
 En qualité « Économie », les fonds animés et les vidéos sont mis en pause. C'est aussi le cas si le système est réglé sur « animations réduites ».
 

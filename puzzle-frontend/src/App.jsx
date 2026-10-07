@@ -672,8 +672,10 @@ function LobbySwatch({ bg, active, onClick }) {
     border: active ? '2px solid var(--accent)' : '2px solid transparent', outline: '1px solid var(--border)',
   };
   if (bg.type === 'image') { style.backgroundImage = `url(${bg.value})`; style.backgroundSize = 'cover'; }
-  else if (bg.type === 'video') style.background = '#1c1f26';
-  else if (bg.type === 'animated') style.background = ANIMATED_PREVIEWS[bg.value];
+  else if (bg.type === 'video') {
+    style.background = '#1c1f26';
+    if (bg.thumb) { style.backgroundImage = `url(${bg.thumb})`; style.backgroundSize = 'cover'; style.backgroundPosition = 'center'; }
+  } else if (bg.type === 'animated') style.background = ANIMATED_PREVIEWS[bg.value];
   else if (bg.value.includes('gradient')) style.backgroundImage = bg.value;
   else style.backgroundColor = bg.value;
   return <button type="button" title={bg.name} style={style} onClick={onClick} />;
@@ -730,7 +732,8 @@ function LobbyScreen({
           >
             {PRESET_IMAGES.map((img) => (
               <img
-                key={img.id} src={img.url} alt={img.name}
+                key={img.id} src={img.thumb || img.url} alt={img.name} title={img.name}
+                loading="lazy" decoding="async"
                 onClick={() => setSelectedImageSrc(img.url)}
                 className={`preset-thumb ${selectedImageSrc === img.url ? 'active' : ''}`}
               />

@@ -7,13 +7,27 @@
 // ============================================================
 
 // --- 1. Images de puzzle proposées par défaut ---
-// Fichier déposé dans puzzle-frontend/public/, puis une ligne ici.
+// Le plus simple : dépose l'image dans medias-originaux/puzzles/, lance
+// `npm run medias` (redimensionne à 4096 px max + crée la vignette), puis
+// colle la ligne puzzle(...) qu'il affiche. Voir GUIDE-MEDIAS.md.
 // Conseil qualité : au moins 3000 px de large (les pièces sont découpées
 // dans la photo d'origine : plus elle est grande, plus le zoom est net).
+// `thumb` = vignette légère du carrousel d'accueil (sinon l'image entière).
+const puzzle = (id, name) => ({ id, name, url: `/puzzles/${id}.jpg`, thumb: `/puzzles/${id}-mini.jpg` });
+
 export const PRESET_IMAGES = [
   { id: 1, name: "L'œil coloré", url: '/oeuil.jpg' },
   { id: 2, name: 'Ciel matinal', url: '/ciel.jpg' },
   { id: 3, name: 'Montgolfière', url: '/ballon.jpeg' },
+  puzzle('vague-de-kanagawa', 'Vague de Kanagawa'),
+  puzzle('voie-lactee-sur-les-alpes', 'Voie lactée sur les Alpes'),
+  puzzle('cratere-du-kawah-ijen', 'Cratère du Kawah Ijen'),
+  puzzle('crateres-lunaires', 'Cratères lunaires'),
+  puzzle('rochers-du-desert', 'Rochers du désert'),
+  puzzle('ferrari-296-gt', 'Ferrari 296 GT'),
+  puzzle('mansory-vivere', 'Mansory Vivere'),
+  puzzle('the-legend-of-zelda', 'The Legend of Zelda'),
+  puzzle('les-simpson', 'Les Simpson'),
 ];
 
 // --- 2. Fonds d'écran (accueil + table de jeu) ---
@@ -24,9 +38,15 @@ export const PRESET_IMAGES = [
 // type "video"    -> fichier vidéo (mp4/webm) dans /public, en boucle,
 //                    muet, toujours plein écran quel que soit le zoom.
 //                    `poster` = image affichée pendant le chargement.
+//                    `thumb`  = petite vignette (240 px) du sélecteur.
 //                    Toujours MUETTE : le navigateur refuse de lancer tout
 //                    seul une vidéo avec du son (voir GUIDE-MEDIAS.md).
+//                    Noms de fichiers : minuscules, sans espaces ni accents.
 // L'hôte peut aussi envoyer sa propre photo de fond depuis les réglages.
+const video = (id, name) => ({
+  id, name, type: 'video', value: `/fonds/${id}.mp4`, poster: `/fonds/${id}.jpg`, thumb: `/fonds/${id}-mini.jpg`,
+});
+
 export const BACKGROUNDS = [
   { id: 'dark', name: 'Sombre', type: 'color', value: '#0e0f12' },
   { id: 'night', name: 'Nuit violette', type: 'color', value: 'linear-gradient(160deg, #0f0c29, #302b63, #24243e)' },
@@ -36,10 +56,17 @@ export const BACKGROUNDS = [
   { id: 'stars', name: 'Ciel étoilé (animé)', type: 'animated', value: 'stars' },
   { id: 'flow', name: 'Dégradé vivant (animé)', type: 'animated', value: 'flow' },
   { id: 'rain', name: 'Pluie (animé)', type: 'animated', value: 'rain' },
-  // Exemples à décommenter une fois les fichiers déposés dans public/fonds/ :
-  // { id: 'pluie-video', name: 'Pluie (vidéo)', type: 'video', value: '/fonds/pluie.mp4', poster: '/fonds/pluie.jpg' },
-  // { id: 'lofi-room', name: 'Chambre lofi', type: 'video', value: '/fonds/lofi-room.mp4' },
-  // { id: 'foret', name: 'Forêt', type: 'image', value: '/fonds/foret.jpg' },
+  // Vidéos : fichiers dans public/fonds/ (<id>.mp4, <id>.jpg, <id>-mini.jpg),
+  // créés par `npm run medias` depuis medias-originaux/fonds/.
+  video('pluie', 'Pluie'),
+  video('foret-sous-la-pluie', 'Forêt sous la pluie'),
+  video('maison-sous-la-pluie', 'Maison sous la pluie'),
+  video('lofi-au-mont-fuji', 'Lofi au mont Fuji'),
+  video('ambiance', 'Ambiance'),
+  video('winter-mood', 'Winter mood'),
+  video('vacances-mood', 'Vacances mood'),
+  video('voyage-imaginaire', 'Voyage imaginaire'),
+  video('trait-bleu', 'Trait bleu'),
 ];
 
 // Fond à afficher pour un identifiant de réglage ('custom' = photo de l'hôte).

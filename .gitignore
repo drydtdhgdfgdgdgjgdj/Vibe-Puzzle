@@ -10,3 +10,7 @@ data/uploads/
 data/database.corrupt-*.json
 data/*.tmp
 data/archive-*/
+
+# Vidéos et images sources (lourdes) : seules les versions compressées de
+# puzzle-frontend/public/ partent sur GitHub et le serveur.
+medias-originaux/

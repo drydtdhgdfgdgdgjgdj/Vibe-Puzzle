@@ -14,14 +14,16 @@ function BackgroundSwatch({ bg, active, pending, onClick }) {
     display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', overflow: 'hidden',
   };
   if (bg.type === 'image') { style.backgroundImage = `url(${bg.value})`; style.backgroundSize = 'cover'; style.backgroundPosition = 'center'; }
-  else if (bg.type === 'video') style.background = '#1c1f26';
-  else if (bg.type === 'animated') style.background = ANIMATED_PREVIEWS[bg.value] || '#1c1f26';
+  else if (bg.type === 'video') {
+    style.background = '#1c1f26';
+    if (bg.thumb) { style.backgroundImage = `url(${bg.thumb})`; style.backgroundSize = 'cover'; style.backgroundPosition = 'center'; }
+  } else if (bg.type === 'animated') style.background = ANIMATED_PREVIEWS[bg.value] || '#1c1f26';
   else if (bg.value.includes('gradient')) style.backgroundImage = bg.value;
   else style.backgroundColor = bg.value;
 
   return (
     <button type="button" onClick={onClick} title={bg.name} style={style} className="swatch-btn">
-      {bg.type === 'video' && <VideoIcon size={16} />}
+      {bg.type === 'video' && !bg.thumb && <VideoIcon size={16} />}
       {pending && <span className="pending-dot" />}
     </button>
   );
