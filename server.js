@@ -620,7 +620,8 @@ function createPuzzleServer({
     app.use('/assets', express.static(path.join(distDir, 'assets'), { maxAge: '1y', immutable: true }));
     app.use(express.static(distDir, { index: false, maxAge: '1h' }));
     app.use((req, res, next) => {
-      if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/socket.io')) return next();
+      // HEAD aussi : les outils de surveillance (UptimeRobot...) l'utilisent.
+      if ((req.method !== 'GET' && req.method !== 'HEAD') || req.path.startsWith('/api/') || req.path.startsWith('/uploads/') || req.path.startsWith('/socket.io')) return next();
       res.set('Cache-Control', 'no-cache');
       res.sendFile(path.join(distDir, 'index.html'));
     });

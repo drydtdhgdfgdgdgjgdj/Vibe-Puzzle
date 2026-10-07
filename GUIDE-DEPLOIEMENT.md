@@ -167,7 +167,7 @@ Une fois que `nslookup ton-domaine.me` renvoie bien l'IP de la machine :
 ```bash
 sudo cp ~/Vibe-Puzzle/deploiement/Caddyfile /etc/caddy/Caddyfile
 sudo nano /etc/caddy/Caddyfile     # remplace ton-domaine.me (3 fois), Ctrl+O, Entrée, Ctrl+X
-caddy validate --config /etc/caddy/Caddyfile   # doit finir par "Valid configuration"
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile   # doit finir par "Valid configuration" (en tant que caddy, pas root : sinon le journal devient illisible pour Caddy)
 sudo systemctl reload caddy
 ```
 Ouvre https://ton-domaine.me : le cadenas doit apparaître dans la minute. https://www.ton-domaine.me doit renvoyer vers l'adresse sans `www`.
