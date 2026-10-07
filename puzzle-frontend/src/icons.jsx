@@ -211,6 +211,22 @@ export const EyeIcon = ({ size = 18, className }) => (
   </svg>
 );
 
+export const EyeOffIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M9.9 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4" />
+    <path d="M6.6 6.9C4 8.6 2.5 12 2.5 12S6 18.5 12 18.5a9.3 9.3 0 0 0 4.9-1.4" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    <path d="M3.5 3.5l17 17" />
+  </svg>
+);
+
+export const SparklesIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M10.5 3.5l1.8 4.9 4.9 1.8-4.9 1.8-1.8 4.9-1.8-4.9-4.9-1.8 4.9-1.8Z" />
+    <path d="M18 14.5l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9Z" />
+  </svg>
+);
+
 export const PingIcon = ({ size = 18, className }) => (
   <svg {...base(size)} className={className}>
     <circle cx="12" cy="12" r="2.2" />
@@ -324,5 +340,73 @@ export const KeyboardIcon = ({ size = 18, className }) => (
   <svg {...base(size)} className={className}>
     <rect x="2.5" y="6" width="19" height="12" rx="2" />
     <path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7 14h10" />
+  </svg>
+);
+
+export const RadioIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3" y="8" width="18" height="12" rx="2" />
+    <path d="m7 8 9.5-4.5" />
+    <circle cx="15.5" cy="14" r="2.6" />
+    <path d="M6.5 12.5h3M6.5 15.5h3" />
+  </svg>
+);
+
+export const CoffeeIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M4.5 9.5h12v5a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5Z" />
+    <path d="M16.5 11h1.5a2.5 2.5 0 0 1 0 5h-1.8" />
+    <path d="M8.5 3.5c-.8 1 .8 2 0 3M12.5 3.5c-.8 1 .8 2 0 3" />
+  </svg>
+);
+
+export const WavesIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M3 8.5c2-1.6 3.5-1.6 5.5 0s3.5 1.6 5.5 0 3.5-1.6 5.5 0" />
+    <path d="M3 13c2-1.6 3.5-1.6 5.5 0s3.5 1.6 5.5 0 3.5-1.6 5.5 0" />
+    <path d="M3 17.5c2-1.6 3.5-1.6 5.5 0s3.5 1.6 5.5 0 3.5-1.6 5.5 0" />
+  </svg>
+);
+
+export const PianoIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+    <path d="M8 4.5v15M12 4.5v15M16 4.5v15" />
+    <path d="M6.5 4.5v8h3v-8M14.5 4.5v8h3v-8" fill="currentColor" stroke="none" opacity="0.85" />
+  </svg>
+);
+
+export const GlobeIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M3.5 12h17M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5s1.1-6.1 3.4-8.5Z" />
+  </svg>
+);
+
+export const LinkIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+    <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+  </svg>
+);
+
+export const FileAudioIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M14 3.5H7a1.5 1.5 0 0 0-1.5 1.5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8Z" />
+    <path d="M14 3.5V8h4.5" />
+    <path d="M11 17.5v-6l4-1" />
+    <circle cx="9.6" cy="17.5" r="1.4" />
+  </svg>
+);
+
+export const PlusIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const StopIcon = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />
   </svg>
 );

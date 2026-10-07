@@ -241,6 +241,59 @@ test('reconnexion et double onglet : room_resync, ancien onglet remplacé', asyn
   }
 });
 
+test('création : pièces magiques sur demande, classiques sinon', async () => {
+  const { srv, url, post } = await startServer();
+  const base = { creatorClientId: 'c-m', creatorPseudo: 'M', cols: 4, rows: 3, imgWidth: 800, imgHeight: 600, originalImage: '/ciel.jpg' };
+  const magic = await post('/api/rooms', { ...base, cut: 'magic' });
+  const classic = await post('/api/rooms', { ...base, cut: 'nimporte-quoi' });
+  const a = ioClient(url, { transports: ['websocket'], forceNew: true });
+  try {
+    let p = once(a, 'load_puzzle');
+    a.emit('join_room', { roomId: magic.roomId, clientId: 'c-m', pseudo: 'M' });
+    const m = await p;
+    const pieces = Object.entries(m.pieces);
+    assert.equal(pieces.length, 12, 'le nombre de pièces demandé');
+    assert.equal(m.cut, 'magic');
+    assert.ok(m.cols > 4 && m.rows > 3, 'grille fine');
+    assert.ok(pieces.every(([, x]) => x.shape.cut === 'magic' && x.box && x.adj.length && x.shape.p.length >= 8));
+    assert.ok(pieces.some(([, x]) => x.box[2] * x.box[3] > 1), 'des pièces de plusieurs cases');
+
+    // Une grande pièce posée dans le cadre se cale sur son propre cadre.
+    const [bigId, big] = pieces.find(([, x]) => x.box[2] * x.box[3] > 1);
+    const moved = once(a, 'pieces_moved', () => true, 400).catch(() => null);
+    a.emit('grab', { roomId: magic.roomId, pieceIds: [bigId] });
+    a.emit('drop', { roomId: magic.roomId, updates: [{ id: bigId, x: 0, y: 0, groupId: 'LOCKED' }] });
+    await moved;
+    await sleep(80);
+    const stored = srv.db[magic.roomId].pieces[bigId];
+    const cw = 800 / m.cols;
+    const ch = 600 / m.rows;
+    assert.ok(Math.abs(stored.x - (2500 - 400 + big.box[0] * cw)) < 1e-6 && Math.abs(stored.y - (2500 - 300 + big.box[1] * ch)) < 1e-6);
+    assert.equal(stored.groupId, 'LOCKED');
+
+    // Un focus prend des pièces entières et les étale sur la mini-table.
+    const started = once(a, 'focus_started');
+    a.emit('focus_start', { roomId: magic.roomId, size: 25, aspect: 1.6 });
+    const f = await started;
+    assert.ok(f.focus.pieceIds.length >= 2);
+    for (const id of f.focus.pieceIds) {
+      assert.ok(Number.isFinite(f.pieces[id].fx) && Number.isFinite(f.pieces[id].fy));
+      assert.ok(f.pieces[id].box, 'formes complètes transmises');
+    }
+    const ended = once(a, 'focus_ended');
+    a.emit('focus_end', { roomId: magic.roomId });
+    await ended;
+
+    p = once(a, 'load_puzzle');
+    a.emit('join_room', { roomId: classic.roomId, clientId: 'c-m', pseudo: 'M' });
+    const c = await p;
+    assert.ok(Object.values(c.pieces).every((x) => x.shape.cut === undefined && 'topTab' in x.shape));
+  } finally {
+    a.close();
+    await srv.close();
+  }
+});
+
 test('déconnexion en plein glissé : les autres reçoivent les positions exactes', async () => {
   const { srv, url, post } = await startServer();
   const { roomId } = await post('/api/rooms', {
@@ -304,6 +357,54 @@ test('libre -> accroché via le serveur : un bloc vole au cadre et la partie peu
     h.emit('update_room_settings', { roomId, settings: { lockMode: 'locked' } });
     const sync = await p1;
     for (const id of ids) assert.equal(sync.pieces[id].groupId, 'LOCKED');
+  } finally {
+    h.close();
+    await srv.close();
+  }
+});
+
+test('musique perso : envoi d’un MP3, réglage partagé, ancien fichier supprimé', async () => {
+  const { srv, url, post } = await startServer();
+  const { roomId } = await post('/api/rooms', {
+    creatorClientId: 'c-h', creatorPseudo: 'H', cols: 2, rows: 2, imgWidth: 400, imgHeight: 400, originalImage: '/ciel.jpg',
+    initialSettings: { music: 'custom', customMusic: { kind: 'youtube', youtubeId: '4xDzrJKXOOY', name: 'Synthwave' } },
+  });
+  const mp3 = `data:audio/mpeg;base64,${Buffer.concat([Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00', 'latin1'), Buffer.alloc(64, 0xaa)]).toString('base64')}`;
+  const h = ioClient(url, { transports: ['websocket'], forceNew: true });
+  try {
+    let p1 = once(h, 'load_puzzle');
+    h.emit('join_room', { roomId, clientId: 'c-h', pseudo: 'H' });
+    const load = await p1;
+    assert.equal(load.settings.music, 'custom');
+    assert.equal(load.settings.customMusic.youtubeId, '4xDzrJKXOOY', 'musique perso choisie à l’accueil');
+
+    // Refus : pas membre, faux fichier audio.
+    assert.match((await post(`/api/rooms/${roomId}/music`, { clientId: 'inconnu', audio: mp3 })).error, /Rejoins/);
+    const fake = `data:audio/mpeg;base64,${Buffer.from('<html>pas de la musique</html>').toString('base64')}`;
+    assert.match((await post(`/api/rooms/${roomId}/music`, { clientId: 'c-h', audio: fake })).error, /Format non reconnu/);
+
+    // Envoi + application immédiate (musique choisie à l'accueil).
+    p1 = once(h, 'room_settings_changed', (s) => s.customMusic?.kind === 'file');
+    const sent = await post(`/api/rooms/${roomId}/music`, { clientId: 'c-h', audio: mp3, name: 'Ma chanson', apply: true });
+    assert.match(sent.url, new RegExp(`^/uploads/${roomId}-music-[0-9a-f]+\.mp3$`));
+    const changed = await p1;
+    assert.deepEqual(changed.customMusic, { kind: 'file', url: sent.url, name: 'Ma chanson' });
+    const file = await fetch(url + sent.url);
+    assert.equal(file.status, 200);
+    assert.match(file.headers.get('content-type'), /audio\/mpeg/);
+
+    // Un lien remplace le fichier : celui-ci est supprimé du serveur.
+    p1 = once(h, 'room_settings_changed', (s) => s.customMusic?.kind === 'url');
+    h.emit('update_room_settings', { roomId, settings: { music: 'custom', customMusic: { kind: 'url', url: 'https://stream.laut.fm/lofi', name: 'Lofi' } } });
+    await p1;
+    assert.equal((await fetch(url + sent.url)).status, 404);
+
+    // Lien dangereux ignoré, radio prédéfinie acceptée.
+    h.emit('update_room_settings', { roomId, settings: { customMusic: { kind: 'url', url: 'javascript:alert(1)' } } });
+    p1 = once(h, 'room_settings_changed', (s) => s.music === 'fip');
+    h.emit('update_room_settings', { roomId, settings: { music: 'fip' } });
+    const last = await p1;
+    assert.equal(last.customMusic.url, 'https://stream.laut.fm/lofi');
   } finally {
     h.close();
     await srv.close();

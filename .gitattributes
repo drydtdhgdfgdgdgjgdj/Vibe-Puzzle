@@ -1,0 +1,8 @@
+# Scripts et configs exécutés sur le serveur Linux : toujours en fins de ligne LF.
+*.sh text eol=lf
+*.service text eol=lf
+Caddyfile text eol=lf
+
+# Scripts PowerShell lancés sous Windows : CRLF, et un BOM UTF-8 dans le
+# fichier (sinon Windows PowerShell 5.1 abîme les accents).
+*.ps1 text eol=crlf

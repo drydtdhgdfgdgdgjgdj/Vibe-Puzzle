@@ -18,15 +18,18 @@ import { getCursorShape } from '../cursorShapes';
 const CENTER = 2500;
 const LOCKED = 'LOCKED';
 const HUD_MARGINS = { top: 124, bottom: 92, left: 16, right: 16 };
+const BARE_MARGINS = { top: 16, bottom: 16, left: 16, right: 16 };
 
 // Zone de l'écran non couverte par le HUD : c'est elle que la grande
 // table doit remplir à l'arrivée (son ratio est envoyé à la création).
-export function safeAreaFor(width, height) {
+// HUD masqué (mode clair) : presque tout l'écran.
+export function safeAreaFor(width, height, hudHidden = false) {
+  const m = hudHidden ? BARE_MARGINS : HUD_MARGINS;
   return {
-    x: HUD_MARGINS.left,
-    y: HUD_MARGINS.top,
-    w: Math.max(200, width - HUD_MARGINS.left - HUD_MARGINS.right),
-    h: Math.max(200, height - HUD_MARGINS.top - HUD_MARGINS.bottom),
+    x: m.left,
+    y: m.top,
+    w: Math.max(200, width - m.left - m.right),
+    h: Math.max(200, height - m.top - m.bottom),
   };
 }
 
@@ -61,16 +64,48 @@ export class PuzzleEngine {
     this.lastHintKey = '';
     this.followSocketId = null;
     this.cursorToken = 0;
+    this.hudHidden = false;
     this.sfx = createSoundFx(() => (this.prefs.sfxMuted ? 0 : (this.prefs.sfxVolume ?? 0.8)));
     // Accès console / tests automatisés, en développement uniquement.
     if (import.meta.env.DEV) window.__puzzleEngine = this;
 
+    // pw × ph : une case de la grille (une pièce classique en occupe une,
+    // une pièce magique plusieurs) ; unit / big : taille typique d'une pièce.
     const pw = room.imgWidth / room.cols;
     const ph = room.imgHeight / room.rows;
-    this.metrics = { pw, ph, ts: Math.min(pw, ph) * 0.25 };
+    const scale = Math.sqrt((room.cols * room.rows) / Math.max(1, Object.keys(room.pieces).length));
+    this.metrics = { pw, ph, ts: Math.min(pw, ph) * 0.25, unit: Math.min(pw, ph) * scale, big: Math.max(pw, ph) * scale };
+    this.cellIndex = new Map(Object.entries(room.pieces).map(([id, p]) => [`${p.c},${p.r}`, id]));
     this.frame = { x: CENTER - room.imgWidth / 2, y: CENTER - room.imgHeight / 2, w: room.imgWidth, h: room.imgHeight };
     this.table = room.table || { x: this.frame.x - this.frame.w, y: this.frame.y - this.frame.h, w: this.frame.w * 3, h: this.frame.h * 3 };
     for (const [id, p] of Object.entries(room.pieces)) if (p.placedBy) this.placedBy.set(id, p.placedBy);
+  }
+
+  // ============================================================
+  // Géométrie d'une pièce (données de la partie)
+  // ============================================================
+  // Cadre, en cases : [colonne, ligne, largeur, hauteur].
+  pieceBox(p) {
+    return p.box || [p.c, p.r, 1, 1];
+  }
+
+  pieceSize(p) {
+    const b = this.pieceBox(p);
+    return { w: b[2] * this.metrics.pw, h: b[3] * this.metrics.ph };
+  }
+
+  // Pièces qui la touchent dans le puzzle fini : liste de la découpe
+  // magique, ou les quatre cases autour d'une pièce classique.
+  neighborIds(p) {
+    if (p.adj) return p.adj;
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+      .map(([dc, dr]) => this.cellIndex.get(`${p.c + dc},${p.r + dr}`))
+      .filter(Boolean);
+  }
+
+  isEdgePiece(p) {
+    const [bx, by, bw, bh] = this.pieceBox(p);
+    return bx === 0 || by === 0 || bx + bw === this.room.cols || by + bh === this.room.rows;
   }
 
   // ============================================================
@@ -172,7 +207,7 @@ export class PuzzleEngine {
       rows: this.room.rows,
       worldW: this.room.imgWidth,
       worldH: this.room.imgHeight,
-      pieces: Object.entries(this.room.pieces).map(([id, p]) => ({ id, c: p.c, r: p.r, shape: p.shape })),
+      pieces: Object.entries(this.room.pieces).map(([id, p]) => ({ id, c: p.c, r: p.r, box: p.box, shape: p.shape })),
       quality: this.quality,
       seams: this.settings.showSeams !== false,
       maxTextureSize: this.maxTextureSize,
@@ -221,12 +256,13 @@ export class PuzzleEngine {
       shadows: this.shadowsEnabled(),
     });
     const { pw, ph } = this.metrics;
-    const { cols, rows } = this.room;
     for (const [id, p] of Object.entries(this.room.pieces)) {
+      const [bx, by] = this.pieceBox(p);
       this.main.addPiece({
         id, c: p.c, r: p.r, shape: p.shape, x: p.x, y: p.y, groupId: p.groupId,
-        tx: this.frame.x + p.c * pw, ty: this.frame.y + p.r * ph,
-        isEdge: p.c === 0 || p.r === 0 || p.c === cols - 1 || p.r === rows - 1,
+        tx: this.frame.x + bx * pw, ty: this.frame.y + by * ph,
+        ...this.pieceSize(p), adj: this.neighborIds(p),
+        isEdge: this.isEdgePiece(p),
         hidden: !!p.focus,
       });
     }
@@ -248,7 +284,12 @@ export class PuzzleEngine {
   }
 
   safeArea() {
-    return safeAreaFor(this.app.screen.width, this.app.screen.height);
+    return safeAreaFor(this.app.screen.width, this.app.screen.height, this.hudHidden);
+  }
+
+  // Mode clair : le HUD est masqué, « Recentrer » peut prendre tout l'écran.
+  setHudHidden(hidden) {
+    this.hudHidden = !!hidden;
   }
 
   // Le focus occupe le centre de l'écran : la grande room reste visible
@@ -579,7 +620,11 @@ export class PuzzleEngine {
       const ids = Object.keys(pieces);
       let x = 0;
       let y = 0;
-      for (const id of ids) { x += pieces[id].x + this.metrics.pw / 2; y += pieces[id].y + this.metrics.ph / 2; }
+      for (const id of ids) {
+        const s = this.pieceSize(pieces[id]);
+        x += pieces[id].x + s.w / 2;
+        y += pieces[id].y + s.h / 2;
+      }
       if (ids.length) this.main.burstAt(x / ids.length, y / ids.length);
       this.cb.onToast?.({ text: `${this.memberName(by) || 'Ton coéquipier'} a terminé sa zone de focus !` });
     }
@@ -729,11 +774,13 @@ export class PuzzleEngine {
     scene.showHintCandidates(candidates, (cand) => this.pickHint(scene, cand));
     this.setHint({ status: 'picking', context: scene.kind });
     // Si aucune case proposée n'est à l'écran, la caméra va en montrer une.
-    const { pw, ph } = this.metrics;
     scene.ensureVisible(candidates
-      .map((c) => scene.slotPosition(c.pieceId, c.anchorPieceId))
-      .filter(Boolean)
-      .map((s) => ({ x: s.x + pw / 2, y: s.y + ph / 2 })));
+      .map((c) => {
+        const slot = scene.slotPosition(c.pieceId, c.anchorPieceId);
+        const p = scene.pieces.get(c.pieceId);
+        return slot && p ? { x: slot.x + p.w / 2, y: slot.y + p.h / 2 } : null;
+      })
+      .filter(Boolean));
   }
 
   pickHint(scene, cand) {
@@ -784,7 +831,8 @@ export class PuzzleEngine {
     const center = scene.pieceCenter(pieceId);
     if (level === 1) {
       const slot = scene.slotPosition(pieceId, h.anchorPieceId);
-      if (slot) scene.ensureVisible([{ x: slot.x + this.metrics.pw / 2, y: slot.y + this.metrics.ph / 2 }]);
+      const q = scene.pieces.get(pieceId);
+      if (slot && q) scene.ensureVisible([{ x: slot.x + q.w / 2, y: slot.y + q.h / 2 }]);
     }
     if (level === 2 && center) {
       const angle = Math.random() * Math.PI * 2;
@@ -918,23 +966,28 @@ export class PuzzleEngine {
       shadows: this.shadowsEnabled(),
     });
     const { c0, r0, c1, r1 } = focus.rect;
-    const isEdge = (p) => p.c === 0 || p.r === 0 || p.c === cols - 1 || p.r === rows - 1;
     for (const id of focus.pieceIds) {
       const p = pieces[id];
       if (!p) continue;
+      const [bx, by] = this.pieceBox(p);
       scene.addPiece({
         id, c: p.c, r: p.r, shape: p.shape,
         x: p.fx ?? 0, y: p.fy ?? 0, groupId: p.groupId,
-        tx: (p.c - c0) * pw, ty: (p.r - r0) * ph, isEdge: isEdge(p),
+        tx: (bx - c0) * pw, ty: (by - r0) * ph,
+        ...this.pieceSize(p), adj: this.neighborIds(p), isEdge: this.isEdgePiece(p),
       });
     }
     for (const id of focus.contextIds || []) {
       const p = this.room.pieces[id] || pieces[id];
       const mp = this.main.pieces.get(id);
-      if (!mp) continue;
-      const tx = (mp.c - c0) * pw;
-      const ty = (mp.r - r0) * ph;
-      scene.addPiece({ id, c: mp.c, r: mp.r, shape: mp.shape || p?.shape, x: tx, y: ty, groupId: lockedGroupId || 'CONTEXT', tx, ty, context: true });
+      if (!mp || !p) continue;
+      const [bx, by] = this.pieceBox(p);
+      const tx = (bx - c0) * pw;
+      const ty = (by - r0) * ph;
+      scene.addPiece({
+        id, c: mp.c, r: mp.r, shape: mp.shape || p.shape, x: tx, y: ty, groupId: lockedGroupId || 'CONTEXT', tx, ty,
+        ...this.pieceSize(p), adj: this.neighborIds(p), context: true,
+      });
     }
     const gt = this.ghostTexture;
     const ghost = gt ? new PIXI.Texture(gt.baseTexture, new PIXI.Rectangle(
@@ -1003,8 +1056,8 @@ export class PuzzleEngine {
       this.main.refreshInteractivity(p);
       this.main.tweenTo(p, s.x, s.y, complete ? 950 : 650, { delay: Math.random() * 260, ease: easeInOutCubic });
       if (s.placedBy) this.placedBy.set(id, s.placedBy);
-      cx += s.x + this.metrics.pw / 2;
-      cy += s.y + this.metrics.ph / 2;
+      cx += s.x + p.w / 2;
+      cy += s.y + p.h / 2;
       n++;
     }
     if (complete) {

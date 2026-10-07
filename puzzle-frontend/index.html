@@ -2,9 +2,21 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Puzzle</title>
+    <title>Vibe Puzzle · Puzzles à plusieurs en temps réel</title>
+    <meta name="description" content="Assemblez des puzzles à plusieurs, en temps réel, avec vos propres photos. Gratuit, sans inscription : partagez un lien et jouez." />
+    <meta name="theme-color" content="#0e0f12" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- Aperçu quand on partage le lien (Discord, WhatsApp, Messenger...).
+         %VITE_SITE_URL% vient de puzzle-frontend/.env.production -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vibe Puzzle" />
+    <meta property="og:title" content="Vibe Puzzle · Puzzles à plusieurs en temps réel" />
+    <meta property="og:description" content="Assemblez des puzzles à plusieurs, en temps réel, avec vos propres photos. Partagez un lien et jouez." />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
+    <meta property="og:image" content="%VITE_SITE_URL%/ciel.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <div id="root"></div>

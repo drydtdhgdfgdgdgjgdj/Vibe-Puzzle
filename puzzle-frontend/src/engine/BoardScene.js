@@ -8,7 +8,8 @@
 // (les curseurs des autres joueurs vivent dans un calque à l'écran,
 // au-dessus de tout : voir RemoteCursors)
 //
-// Modèle d'une pièce : position "monde" (x, y), groupe, cible (tx, ty)
+// Modèle d'une pièce : position "monde" (x, y), taille de son cadre (w, h),
+// pièces qui la touchent dans le puzzle fini (adj), groupe, cible (tx, ty)
 // et position affichée (dispX, dispY) qui peut être en cours
 // d'animation. Un groupe tenu en main (par moi ou un autre joueur) est
 // déplacé d'un bloc via un conteneur : un seul calcul par image,
@@ -16,7 +17,7 @@
 // ============================================================
 import * as PIXI from 'pixi.js';
 import { tracePiecePath } from '../pieceGeometry';
-import { computeSnap, snapThresholds, clampIntoBounds, expandRect, STEPS } from './snapping';
+import { computeSnap, snapThresholds, clampIntoBounds, expandRect } from './snapping';
 import { pieceHitArea } from './atlas';
 
 const SHADOW_ALPHA = 0.3;
@@ -106,14 +107,12 @@ export class BoardScene {
     this.edgeMarks = [];
     this.edgeMarksLeft = 0;
     this.frameVisible = true;
-    this.thresholds = snapThresholds(metrics.pw, metrics.ph);
-    const big = Math.max(metrics.pw, metrics.ph);
-    this.shadowRest = big * 0.035;
-    this.shadowLift = big * 0.1;
+    this.thresholds = snapThresholds(metrics.unit);
+    this.shadowRest = metrics.big * 0.035;
+    this.shadowLift = metrics.big * 0.1;
 
     this.pieces = new Map();
     this.groups = new Map();
-    this.grid = new Map();
     this.remoteLifts = new Map();
     this.drag = null;
     this.tweens = new Set();
@@ -147,7 +146,10 @@ export class BoardScene {
   // ============================================================
   // Construction
   // ============================================================
-  addPiece({ id, c, r, shape, x, y, groupId, tx, ty, isEdge = false, hidden = false, context = false }) {
+  addPiece({
+    id, c, r, shape, x, y, groupId, tx, ty,
+    w = this.metrics.pw, h = this.metrics.ph, adj = [], isEdge = false, hidden = false, context = false,
+  }) {
     const tex = this.atlas.textures.get(id);
     const sprite = new PIXI.Sprite(tex);
     const shadow = new PIXI.Sprite(tex);
@@ -158,12 +160,11 @@ export class BoardScene {
     sprite.hitArea = pieceHitArea(shape, this.metrics, this.atlas);
     sprite.cursor = 'pointer';
     const piece = {
-      id, c, r, shape, x, y, groupId, tx, ty, isEdge, hidden, context,
+      id, c, r, shape, x, y, w, h, adj, groupId, tx, ty, isEdge, hidden, context,
       sprite, shadow, heldBy: null, lifted: false, dispX: x, dispY: y, tween: null,
     };
     sprite.on('pointerdown', (e) => this.onPiecePointerDown(piece, e));
     this.pieces.set(id, piece);
-    this.grid.set(`${c},${r}`, piece);
     this.addToGroup(piece);
     this.placeInLayer(piece);
     this.updateSpritePos(piece);
@@ -312,7 +313,7 @@ export class BoardScene {
 
   drawFrame() {
     const g = this.frameGfx;
-    const unit = Math.min(this.metrics.pw, this.metrics.ph);
+    const { unit } = this.metrics;
     g.clear();
     if (this.kind === 'focus') {
       // Mini-table : une "fenêtre" presque opaque posée sur la grande room,
@@ -343,8 +344,7 @@ export class BoardScene {
 
   setZones(zones) {
     for (const child of this.zoneLayer.removeChildren()) child.destroy({ children: true });
-    const { pw, ph } = this.metrics;
-    const unit = Math.min(pw, ph);
+    const { pw, ph, unit } = this.metrics;
     for (const z of zones) {
       const color = hexColor(z.color);
       const x = this.frame.x + z.rect.c0 * pw;
@@ -443,7 +443,7 @@ export class BoardScene {
     this.drag = null;
     const { group, lift } = d;
     const moving = group.map((p) => ({ p, x: p.x + d.dx, y: p.y + d.dy }));
-    const corr = clampIntoBounds(moving, expandRect(this.table, 0.15), this.metrics);
+    const corr = clampIntoBounds(moving, expandRect(this.table, 0.15));
     for (const m of moving) { m.x += corr.dx; m.y += corr.dy; }
 
     const movingGroupId = group[0].groupId;
@@ -451,7 +451,7 @@ export class BoardScene {
       moving,
       movingGroupId,
       lockedGroupId: this.lockedGroupId,
-      neighborOf: (q, dc, dr) => this.grid.get(`${q.c + dc},${q.r + dr}`) || null,
+      neighborsOf: (q) => this.neighborsOf(q),
       isAvailable: (q) => !q.hidden && !q.heldBy && !q.context,
       groupAvailable: (gid) => this.groupPieces(gid).every((q) => !q.hidden && !q.heldBy && !q.lifted),
       thresholds: this.thresholds,
@@ -475,8 +475,8 @@ export class BoardScene {
       m.p.dispY = v.y;
       this.tweenTo(m.p, nx, ny, snap ? 110 : 80);
       updates.push({ id: m.p.id, x: nx, y: ny, groupId: targetGroupId });
-      cx += nx + this.metrics.pw / 2;
-      cy += ny + this.metrics.ph / 2;
+      cx += nx + m.p.w / 2;
+      cy += ny + m.p.h / 2;
     }
     if (snap) {
       for (const merge of snap.merges) {
@@ -623,7 +623,7 @@ export class BoardScene {
       p.hidden = hidden;
       if (wasHidden && !hidden) {
         p.dispX = s.x;
-        p.dispY = s.y - Math.max(this.metrics.pw, this.metrics.ph) * 0.4;
+        p.dispY = s.y - this.metrics.big * 0.4;
         this.tweenTo(p, s.x, s.y, 420, { delay: Math.random() * 160, fade: true });
       } else if (animate && !hidden) {
         this.tweenTo(p, s.x, s.y, 650, { delay: Math.random() * 140, ease: easeInOutCubic });
@@ -671,7 +671,7 @@ export class BoardScene {
   flashAt(x, y, color = 0xffffff) {
     const g = new PIXI.Graphics();
     this.fxLayer.addChild(g);
-    const maxR = Math.max(this.metrics.pw, this.metrics.ph) * 0.95;
+    const maxR = this.metrics.big * 0.95;
     let t = 0;
     this.effects.add({
       update: (dt) => {
@@ -691,7 +691,7 @@ export class BoardScene {
   burstAt(x, y, { color = 0xffd84a, count = 36, spread = 1 } = {}) {
     const g = new PIXI.Graphics();
     this.fxLayer.addChild(g);
-    const unit = Math.max(this.metrics.pw, this.metrics.ph);
+    const unit = this.metrics.big;
     const parts = Array.from({ length: count }, () => {
       const a = Math.random() * Math.PI * 2;
       const v = unit * (1.5 + Math.random() * 3.5) * spread;
@@ -772,13 +772,9 @@ export class BoardScene {
   // d'au moins 2 pièces, dans toutes les directions.
   computeHintCandidates() {
     if (this.lockedGroupId) {
-      const placed = new Set();
-      for (const p of this.pieces.values()) if (this.isLocked(p)) placed.add(`${p.c},${p.r}`);
       let pool = [...this.pieces.values()].filter((p) => !this.isLocked(p) && !p.hidden);
-      if (placed.size) {
-        const adjacent = pool.filter((p) => STEPS.some(([dc, dr]) => placed.has(`${p.c + dc},${p.r + dr}`)));
-        if (adjacent.length) pool = adjacent;
-      }
+      const adjacent = pool.filter((p) => this.neighborsOf(p).some((q) => this.isLocked(q)));
+      if (adjacent.length) pool = adjacent;
       if (pool.length > 28) pool = shuffle(pool).slice(0, 28);
       return pool.map((p) => ({ pieceId: p.id, anchorPieceId: null }));
     }
@@ -788,9 +784,8 @@ export class BoardScene {
       const members = [...set];
       if (members.some((p) => p.hidden)) continue;
       for (const p of members) {
-        for (const [dc, dr] of STEPS) {
-          const q = this.grid.get(`${p.c + dc},${p.r + dr}`);
-          if (!q || q.groupId === gid || q.hidden) continue;
+        for (const q of this.neighborsOf(p)) {
+          if (q.groupId === gid || q.hidden) continue;
           const prev = best.get(q.id);
           if (!prev || prev.size < set.size) best.set(q.id, { pieceId: q.id, anchorPieceId: members[0].id, size: set.size });
         }
@@ -826,14 +821,20 @@ export class BoardScene {
 
   showHintCandidates(candidates, onPick) {
     this.clearHintOverlays();
-    const { pw, ph } = this.metrics;
-    const unit = Math.min(pw, ph);
+    const { pw, ph, ts, unit } = this.metrics;
     for (const cand of candidates) {
+      const q = this.pieces.get(cand.pieceId);
       const g = new PIXI.Graphics();
-      const inset = unit * 0.06;
       g.lineStyle(Math.max(1.5, unit * 0.035), ACCENT, 0.9);
       g.beginFill(ACCENT, 0.14);
-      g.drawRoundedRect(inset, inset, pw - 2 * inset, ph - 2 * inset, unit * 0.14);
+      if (q?.shape?.cut === 'magic') {
+        // Pièce magique : sa vraie silhouette, à sa place.
+        tracePiecePath(g, q.shape, pw, ph, ts);
+        g.closePath();
+      } else {
+        const inset = unit * 0.06;
+        g.drawRoundedRect(inset, inset, pw - 2 * inset, ph - 2 * inset, unit * 0.14);
+      }
       g.endFill();
       g.eventMode = 'static';
       g.cursor = 'pointer';
@@ -853,7 +854,7 @@ export class BoardScene {
     this.removeHintShape();
     const q = this.pieces.get(pieceId);
     if (!q) return;
-    const unit = Math.min(this.metrics.pw, this.metrics.ph);
+    const { unit } = this.metrics;
     const g = new PIXI.Graphics();
     g.lineStyle(Math.max(2, unit * 0.05), ACCENT, 0.95);
     g.beginFill(ACCENT, 0.22);
@@ -873,8 +874,8 @@ export class BoardScene {
     const q = this.pieces.get(pieceId);
     if (!q) return;
     const ring = new PIXI.Graphics();
-    ring.lineStyle(Math.max(3, Math.min(this.metrics.pw, this.metrics.ph) * 0.07), 0xffd84a, 1);
-    ring.drawCircle(0, 0, Math.max(this.metrics.pw, this.metrics.ph) * 0.85);
+    ring.lineStyle(Math.max(3, this.metrics.unit * 0.07), 0xffd84a, 1);
+    ring.drawCircle(0, 0, Math.max(q.w, q.h) * 0.85);
     const line = new PIXI.Graphics();
     this.hintLayer.addChild(line, ring);
     this.hint.ring = ring;
@@ -899,16 +900,16 @@ export class BoardScene {
     }
     if (this.hint.ring && slot) {
       const q = this.pieces.get(this.hint.pieceId);
-      const cx = q.dispX + this.metrics.pw / 2;
-      const cy = q.dispY + this.metrics.ph / 2;
+      const cx = q.dispX + q.w / 2;
+      const cy = q.dispY + q.h / 2;
       this.hint.ring.position.set(cx, cy);
-      const sx = slot.x + this.metrics.pw / 2;
-      const sy = slot.y + this.metrics.ph / 2;
+      const sx = slot.x + q.w / 2;
+      const sy = slot.y + q.h / 2;
       const key = `${Math.round(cx)},${Math.round(cy)},${Math.round(sx)},${Math.round(sy)}`;
       if (key !== this.hint.lineKey) {
         this.hint.lineKey = key;
         const g = this.hint.line;
-        const unit = Math.min(this.metrics.pw, this.metrics.ph);
+        const { unit } = this.metrics;
         g.clear();
         g.lineStyle(Math.max(2, unit * 0.04), 0xffd84a, 0.85);
         const len = Math.hypot(sx - cx, sy - cy);
@@ -951,14 +952,23 @@ export class BoardScene {
   pieceCenter(pieceId) {
     const p = this.pieces.get(pieceId);
     if (!p) return null;
-    return { x: p.dispX + this.metrics.pw / 2, y: p.dispY + this.metrics.ph / 2 };
+    return { x: p.dispX + p.w / 2, y: p.dispY + p.h / 2 };
+  }
+
+  // Pièces de cette scène qui touchent `p` dans le puzzle fini.
+  neighborsOf(p) {
+    const out = [];
+    for (const id of p.adj) {
+      const q = this.pieces.get(id);
+      if (q) out.push(q);
+    }
+    return out;
   }
 
   // ---------- Pièces de bord accordées : contour doré pulsant ----------
   showEdgeHighlights(ids, durationMs) {
     this.clearEdgeHighlights();
-    const { pw, ph, ts } = this.metrics;
-    const unit = Math.min(pw, ph);
+    const { pw, ph, ts, unit } = this.metrics;
     for (const id of ids) {
       const p = this.pieces.get(id);
       if (!p) continue;
@@ -1015,7 +1025,7 @@ export class BoardScene {
   fitTable({ animate = false, safe }) {
     const vp = this.viewport;
     const scaleFit = Math.min(safe.w / this.table.w, safe.h / this.table.h);
-    const readable = 22 / Math.min(this.metrics.pw, this.metrics.ph);
+    const readable = 22 / this.metrics.unit;
     const scale = Math.min(4, Math.max(scaleFit, Math.min(readable, 1.5)));
     const minScale = Math.max(0.02, Math.min(scale, scaleFit) * 0.6);
     vp.plugins.remove('follow');

@@ -31,7 +31,7 @@ function RoomCard({ room, onJoin, onDelete, onForget, disabled }) {
             {room.isHost
               ? <span className="badge badge-host"><CrownIcon size={11} /> Hôte</span>
               : <span className="badge">{room.role === 'cohost' ? 'Co-hôte' : 'Invité'}{room.hostPseudo ? ` · ${room.hostPseudo}` : ''}</span>}
-            <span>{room.cols} × {room.rows} · {room.total} pièces</span>
+            <span>{room.cut === 'magic' ? `${room.total} pièces magiques` : `${room.cols} × ${room.rows} · ${room.total} pièces`}</span>
           </div>
           <div className="progress"><div style={{ width: `${pct}%` }} /></div>
           <div className="room-meta">

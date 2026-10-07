@@ -5,6 +5,7 @@ import BackgroundLayer from './components/BackgroundLayer';
 import MusicWidget from './components/MusicWidget';
 import MyRooms from './components/MyRooms';
 import RequestToasts from './components/RequestToasts';
+import CutPicker from './components/CutPicker';
 import {
   PRESET_IMAGES, BACKGROUNDS, CURSOR_COLORS, DISCORD_INVITE_URL, MIN_PIECES, MAX_PIECES, ANIMATED_PREVIEWS, findBackground,
 } from './config';
@@ -13,6 +14,7 @@ import { socket, apiPost } from './net';
 import { safeAreaFor } from './engine/PuzzleEngine';
 import { resolveQuality } from './engine/atlas';
 import { describeSettingsText } from './settingsLabels';
+import { readFileAsDataUrl } from './music';
 import { CloseIcon, UploadIcon } from './icons';
 
 const LOBBY_QUICK_COLORS = CURSOR_COLORS.slice(0, 4);
@@ -29,6 +31,11 @@ function computeGrid(target, ratio) {
   const cols = Math.max(2, Math.round(Math.sqrt(target * ratio)));
   const rows = Math.max(2, Math.round(target / cols));
   return { cols, rows };
+}
+
+// Nom affiché d'un fichier audio : sans l'extension.
+function audioName(file) {
+  return (file.name || 'Ma musique').replace(/\.[^.]+$/, '').slice(0, 80) || 'Ma musique';
 }
 
 function loadImage(src) {
@@ -48,6 +55,23 @@ function toDataUrl(img, maxSide, quality) {
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', quality);
 }
+
+// Lien d'invitation « …/?partie=CODE » : on retient le code puis on le
+// retire de l'adresse, pour qu'un rechargement plus tard ne relance pas
+// une arrivée dans cette partie.
+function readInviteCode() {
+  try {
+    const code = (new URLSearchParams(window.location.search).get('partie') || '').trim().toLowerCase();
+    if (!/^[a-z0-9]{1,20}$/.test(code)) return '';
+    const url = new URL(window.location.href);
+    url.searchParams.delete('partie');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+    return code;
+  } catch {
+    return '';
+  }
+}
+const INVITE_CODE = readInviteCode();
 
 let toastSeq = 0;
 
@@ -83,14 +107,17 @@ export default function App() {
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState('');
 
-  const [roomCodeInput, setRoomCodeInput] = useState('');
+  const [roomCodeInput, setRoomCodeInput] = useState(INVITE_CODE);
   const [joinError, setJoinError] = useState('');
   const [selectedImageSrc, setSelectedImageSrc] = useState(PRESET_IMAGES[0].url);
   const [imageRatio, setImageRatio] = useState(1.5);
   const [targetPieces, setTargetPieces] = useState(48);
   const [roomNameInput, setRoomNameInput] = useState('');
   const [lobbyBackgroundId, setLobbyBackgroundId] = useState(BACKGROUNDS[0].id);
-  const [lobbyMusicId, setLobbyMusicId] = useState('none');
+  // Musique de l'accueil ; un fichier choisi ici reste sur ce PC (kind
+  // 'local') jusqu'à la création d'une partie, où il est envoyé au serveur.
+  const [lobbyMusic, setLobbyMusic] = useState({ music: 'none', customMusic: null });
+  const lobbyFileRef = useRef(null);
   const [uploadError, setUploadError] = useState('');
   const [formError, setFormError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -348,6 +375,18 @@ export default function App() {
     });
   };
 
+  // Arrivée par un lien d'invitation : on entre directement si le pseudo
+  // est déjà connu, sinon le code est prêt et on réclame juste le pseudo.
+  const invitedRef = useRef(false);
+  useEffect(() => {
+    if (invitedRef.current || !INVITE_CODE) return;
+    invitedRef.current = true;
+    if (profile.pseudo.trim()) joinRoomById(INVITE_CODE);
+    else setFormError('Choisis un pseudo pour rejoindre la partie de ton ami.');
+    // Une seule fois, au chargement de la page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleImageUpload = (event) => {
     setUploadError('');
     const file = event.target.files[0];
@@ -378,15 +417,27 @@ export default function App() {
         originalImage: isCustomImage ? toDataUrl(img, 4096, 0.92) : selectedImageSrc,
         thumb: toDataUrl(img, 360, 0.8),
         cols, rows, imgWidth, imgHeight,
-        name: roomNameInput.trim() || `${presetName} · ${cols * rows} pièces`,
+        cut: prefs.pieceCut,
+        name: roomNameInput.trim() || `${presetName} · ${cols * rows} pièces${prefs.pieceCut === 'magic' ? ' magiques' : ''}`,
         viewport: { w: safe.w, h: safe.h },
         creatorClientId: CLIENT_ID,
         creatorPseudo: profile.pseudo.trim(),
         creatorColor: profile.color,
         creatorCursorShape: profile.cursorShape,
         creatorCursorImage: profile.cursorImage,
-        initialSettings: { background: lobbyBackgroundId, music: lobbyMusicId },
+        initialSettings: {
+          background: lobbyBackgroundId,
+          ...(lobbyMusic.customMusic?.kind === 'local' ? { music: 'none' } : lobbyMusic),
+        },
       });
+      if (lobbyMusic.music === 'custom' && lobbyMusic.customMusic?.kind === 'local' && lobbyFileRef.current) {
+        try {
+          const audio = await readFileAsDataUrl(lobbyFileRef.current);
+          await apiPost(`/api/rooms/${data.roomId}/music`, { clientId: CLIENT_ID, audio, name: lobbyMusic.customMusic.name, apply: true });
+        } catch (err) {
+          pushToast({ text: `Ta musique n’a pas pu être envoyée : ${err.message}` });
+        }
+      }
       setRoomNameInput('');
       joinRoomById(data.roomId);
     } catch (err) {
@@ -446,6 +497,20 @@ export default function App() {
     await apiPost(`/api/rooms/${roomId}/background`, { clientId: CLIENT_ID, image });
   };
 
+  // Musique perso de la partie : envoyée au serveur pour que tout le monde l'entende.
+  const uploadMusic = async (file) => {
+    const audio = await readFileAsDataUrl(file);
+    const { url } = await apiPost(`/api/rooms/${roomId}/music`, { clientId: CLIENT_ID, audio });
+    return { kind: 'file', url, name: audioName(file) };
+  };
+
+  // À l'accueil, un fichier choisi est seulement lu sur ce PC.
+  const pickLobbyFile = async (file) => {
+    if (lobbyMusic.customMusic?.kind === 'local') URL.revokeObjectURL(lobbyMusic.customMusic.url);
+    lobbyFileRef.current = file;
+    return { kind: 'local', url: URL.createObjectURL(file), name: audioName(file) };
+  };
+
   const goHome = () => {
     if (roomId) socket.emit('leave_room', { roomId });
     if (view === 'waiting') socket.emit('cancel_join');
@@ -477,8 +542,10 @@ export default function App() {
 
       {view !== 'in-room' && (
         <MusicWidget
-          trackId={lobbyMusicId}
-          onChangeTrack={setLobbyMusicId}
+          musicId={lobbyMusic.music}
+          customMusic={lobbyMusic.customMusic}
+          onSelect={(partial) => setLobbyMusic((prev) => ({ ...prev, ...partial }))}
+          onUpload={pickLobbyFile}
           volume={prefs.musicVolume}
           muted={prefs.musicMuted}
           onVolume={(v) => updatePrefs({ musicVolume: v })}
@@ -508,6 +575,7 @@ export default function App() {
           targetPieces={targetPieces} setTargetPieces={setTargetPieces} grid={grid}
           roomNameInput={roomNameInput} setRoomNameInput={setRoomNameInput}
           lobbyBackgroundId={lobbyBackgroundId} setLobbyBackgroundId={setLobbyBackgroundId}
+          pieceCut={prefs.pieceCut} setPieceCut={(cut) => updatePrefs({ pieceCut: cut })}
           uploadError={uploadError} isLoading={isLoading}
           fileInputRef={fileInputRef} handleImageUpload={handleImageUpload}
           startGame={startGame}
@@ -569,6 +637,7 @@ export default function App() {
           pendingSettingKeys={pendingKeySet}
           onRename={(name) => socket.emit('rename_room', { roomId, name })}
           onUploadBackground={uploadBackground}
+          onUploadMusic={uploadMusic}
           onKick={(memberId, ban) => socket.emit('kick_member', { roomId, memberId, ban })}
           onUnban={(memberId) => socket.emit('unban_member', { roomId, memberId })}
           onSetRole={(memberId, role) => socket.emit('set_role', { roomId, memberId, role })}
@@ -616,6 +685,7 @@ function LobbyScreen({
   targetPieces, setTargetPieces, grid,
   roomNameInput, setRoomNameInput,
   lobbyBackgroundId, setLobbyBackgroundId,
+  pieceCut, setPieceCut,
   uploadError, isLoading, fileInputRef, handleImageUpload, startGame,
   roomCodeInput, setRoomCodeInput, joinRoom, joinError,
   carouselRef, carouselCentered,
@@ -691,9 +761,14 @@ function LobbyScreen({
             ))}
           </div>
 
+          <label className="label">Forme des pièces</label>
+          <CutPicker value={pieceCut} onChange={setPieceCut} image={selectedImageSrc} />
+
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 22 }}>
             <label className="label">
-              Nombre de pièces — <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{grid.cols} × {grid.rows} = {grid.cols * grid.rows} pièces</span>
+              Nombre de pièces — <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
+                {pieceCut === 'magic' ? `${grid.cols * grid.rows} pièces, toutes différentes` : `${grid.cols} × ${grid.rows} = ${grid.cols * grid.rows} pièces`}
+              </span>
             </label>
             <input
               type="range" min={MIN_PIECES} max={MAX_PIECES} step={targetPieces < 100 ? 4 : 10}

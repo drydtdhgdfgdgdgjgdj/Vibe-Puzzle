@@ -4,7 +4,7 @@ import {
   VolumeIcon, VolumeOffIcon, ImageIcon,
 } from '../icons';
 import { CURSOR_SHAPES } from '../cursorShapes';
-import { BACKGROUNDS, MUSIC_TRACKS, CURSOR_COLORS, QUALITY_OPTIONS, ANIMATED_PREVIEWS } from '../config';
+import { BACKGROUNDS, MUSIC_GROUPS, MUSIC_TRACKS, CURSOR_COLORS, QUALITY_OPTIONS, ANIMATED_PREVIEWS } from '../config';
 import CursorEditor from './CursorEditor';
 
 function BackgroundSwatch({ bg, active, pending, onClick }) {
@@ -212,6 +212,21 @@ export default function SettingsModal({
               </div>
 
               <div>
+                <label className="label">Taille des curseurs</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <input
+                    type="range" min={0.6} max={2.5} step={0.1} style={{ flex: 1 }}
+                    value={prefs.cursorScale ?? 1}
+                    onChange={(e) => onUpdatePrefs({ cursorScale: Number(e.target.value) })}
+                    aria-label="Taille des curseurs"
+                  />
+                  <span style={{ minWidth: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>×{Number(prefs.cursorScale ?? 1).toFixed(1)}</span>
+                  <button className="btn btn-ghost btn-xs" disabled={(prefs.cursorScale ?? 1) === 1} onClick={() => onUpdatePrefs({ cursorScale: 1 })}>Normal</button>
+                </div>
+                <p className="hint-text" style={{ marginTop: 8 }}>Change la taille de tous les curseurs (le tien et ceux des autres), seulement sur ton écran.</p>
+              </div>
+
+              <div>
                 <label className="label">Qualité graphique</label>
                 <div className="segmented">
                   {QUALITY_OPTIONS.map((q) => (
@@ -287,8 +302,15 @@ export default function SettingsModal({
               <div>
                 <label className="label">Musique d'ambiance <PendingBadge show={pending.has('music')} /></label>
                 <select className="field" style={{ width: '100%' }} value={settings.music} onChange={(e) => onChangeSetting({ music: e.target.value })}>
-                  {MUSIC_TRACKS.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  <option value="none">Aucune</option>
+                  {MUSIC_GROUPS.map((g) => (
+                    <optgroup key={g.id} label={g.name}>
+                      {MUSIC_TRACKS.filter((t) => t.group === g.id).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </optgroup>
+                  ))}
+                  {settings.music === 'custom' && <option value="custom" disabled>Perso : {settings.customMusic?.name || 'musique perso'}</option>}
                 </select>
+                <p className="hint-text" style={{ marginTop: 8 }}>Plus de choix (ton fichier MP3, un lien YouTube ou radio) avec le bouton note de musique, en bas à droite.</p>
               </div>
 
               <div className="setting-row">

@@ -41,6 +41,7 @@ export async function downloadImageWithSeams(room, filename = 'puzzle-assemble.p
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
 
+  // Une case de la grille (une pièce classique, ou une case des pièces magiques).
   const pieceW = canvas.width / room.cols;
   const pieceH = canvas.height / room.rows;
   const tabSize = Math.min(pieceW, pieceH) * 0.25;
@@ -50,8 +51,9 @@ export async function downloadImageWithSeams(room, filename = 'puzzle-assemble.p
   ctx.lineJoin = 'round';
 
   Object.values(room.pieces).forEach((piece) => {
+    const [bx, by] = piece.box || [piece.c, piece.r];
     ctx.save();
-    ctx.translate(piece.c * pieceW, piece.r * pieceH);
+    ctx.translate(bx * pieceW, by * pieceH);
     ctx.beginPath();
     tracePiecePath(ctx, piece.shape, pieceW, pieceH, tabSize);
     ctx.stroke();

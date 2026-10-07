@@ -1,0 +1,37 @@
+# Service systemd : lance le jeu au démarrage de la machine et le relance
+# s'il plante. Installation (sur le serveur) :
+#   sudo cp deploiement/puzzle.service /etc/systemd/system/puzzle.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now puzzle
+[Unit]
+Description=Puzzle coop (serveur Node)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=azureuser
+WorkingDirectory=/home/azureuser/Vibe-Puzzle
+Environment=NODE_ENV=production
+Environment=PORT=3001
+# Seul Caddy (sur la même machine) parle au serveur.
+Environment=HOST=127.0.0.1
+# Les parties vivent HORS du dossier du code : un git pull n'y touche jamais.
+Environment=PUZZLE_DATA_DIR=/home/azureuser/puzzle-data
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Beaucoup de joueurs = beaucoup de connexions temps réel ouvertes.
+LimitNOFILE=65536
+
+# Protections : le jeu ne peut ni devenir administrateur, ni modifier le
+# système (/usr, /etc, /boot). Il n'écrit que dans le dossier de l'utilisateur.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

@@ -19,8 +19,10 @@ const L = require('./lib/layout');
 const G = require('./lib/groups');
 const F = require('./lib/focus');
 const R = require('./lib/rooms');
+const S = require('./lib/shapes');
 const { createStore } = require('./lib/store');
 const { createImageStore } = require('./lib/images');
+const { createAudioStore } = require('./lib/audio');
 const { migrateDatabase } = require('./lib/migrate');
 
 const PRESET_PATH_RE = /^\/[\w\-./]+\.(jpe?g|png|webp|gif|avif)$/i;
@@ -39,6 +41,7 @@ function createPuzzleServer({
 } = {}) {
   const store = createStore({ dataDir, legacyDbFile, log });
   const images = createImageStore(store.uploadsDir);
+  const audio = createAudioStore(store.uploadsDir);
   const db = store.load();
   store.bind(() => db);
   const migration = migrateDatabase(db, { images, log });
@@ -312,7 +315,13 @@ function createPuzzleServer({
     const changes = {};
     for (const [k, v] of Object.entries(partial)) if (room.settings[k] !== v) changes[k] = v;
     if (changes.background === 'custom' && !room.settings.customBackgroundUrl) delete changes.background;
+    if (changes.music === 'custom' && !changes.customMusic && !room.settings.customMusic) delete changes.music;
+    if (changes.customMusic && JSON.stringify(changes.customMusic) === JSON.stringify(room.settings.customMusic)) delete changes.customMusic;
     if (!Object.keys(changes).length) return false;
+    // Musique perso remplacée : l'ancien fichier envoyé n'a plus d'usage.
+    const oldMusic = room.settings.customMusic;
+    if (changes.customMusic && oldMusic?.kind === 'file' && oldMusic.url !== changes.customMusic.url
+      && oldMusic.url.startsWith(`/uploads/${roomId}-`)) images.removeUrl(oldMusic.url);
 
     if (changes.lockMode) {
       for (const clientId of Object.keys(room.focuses)) endFocusAndBroadcast(roomId, clientId, 'mode_change');
@@ -443,49 +452,36 @@ function createPuzzleServer({
         try { thumbUrl = images.save(b.thumb, `${roomId}-thumb`); } catch { /* miniature facultative */ }
       }
 
-      // Formes des pièces : chaque bord intérieur est une languette d'un
-      // côté et une encoche de l'autre.
-      const hEdges = [];
-      const vEdges = [];
-      for (let c = 0; c < cols; c++) {
-        hEdges[c] = [];
-        vEdges[c] = [];
-        for (let r = 0; r < rows; r++) {
-          hEdges[c][r] = Math.random() > 0.5 ? 1 : -1;
-          vEdges[c][r] = Math.random() > 0.5 ? 1 : -1;
-        }
-      }
+      // Découpe : grille régulière (classique), ou pièces magiques de tailles
+      // et de formes toutes différentes, sur une grille fine.
+      const cut = S.cleanCut(b.cut);
+      const { gridCols, gridRows, pieces: cutPieces } = S.generatePieces(cols, rows, cut);
       const frame = { x: C.CENTER - imgWidth / 2, y: C.CENTER - imgHeight / 2, w: imgWidth, h: imgHeight };
       const vp = b.viewport || {};
       const aspect = Number(vp.w) > 0 && Number(vp.h) > 0 ? Number(vp.w) / Number(vp.h) : 16 / 9;
-      const { table, positions } = L.scatterPieces(frame, imgWidth / cols, imgHeight / rows, cols * rows, aspect);
+      const cellW = imgWidth / gridCols;
+      const cellH = imgHeight / gridRows;
+      const typical = Math.sqrt(L.meanBoxCells(cutPieces));
+      const sizes = cutPieces.map((p) => ({ w: (p.box ? p.box[2] : 1) * cellW, h: (p.box ? p.box[3] : 1) * cellH }));
+      const { table, positions } = L.scatterPieces(frame, cellW * typical, cellH * typical, cutPieces.length, aspect, Math.random, sizes);
 
       const pieces = {};
-      let i = 0;
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          const id = `piece_${c}_${r}`;
-          const pos = positions[i++];
-          pieces[id] = {
-            c, r, x: pos.x, y: pos.y, groupId: id, placedBy: null,
-            shape: {
-              topTab: r === 0 ? 0 : -vEdges[c][r - 1],
-              bottomTab: r === rows - 1 ? 0 : vEdges[c][r],
-              leftTab: c === 0 ? 0 : -hEdges[c - 1][r],
-              rightTab: c === cols - 1 ? 0 : hEdges[c][r],
-            },
-          };
-        }
-      }
+      cutPieces.forEach((p, i) => {
+        const id = `piece_${p.c}_${p.r}`;
+        const pos = positions[i];
+        pieces[id] = { c: p.c, r: p.r, x: pos.x, y: pos.y, groupId: id, placedBy: null, shape: p.shape };
+        if (p.box) { pieces[id].box = p.box; pieces[id].adj = p.adj; }
+      });
 
       const now = Date.now();
       db[roomId] = {
         version: 2,
-        name: R.cleanString(b.name, 60) || `Puzzle de ${cols * rows} pièces`,
+        name: R.cleanString(b.name, 60) || `Puzzle de ${cutPieces.length} pièces`,
         imageUrl: originalImageUrl,
         originalImageUrl,
         thumbUrl,
-        cols, rows, imgWidth, imgHeight,
+        cols: gridCols, rows: gridRows, imgWidth, imgHeight,
+        cut,
         table,
         pieces,
         startTime: now,
@@ -585,6 +581,30 @@ function createPuzzleServer({
       room.settings.background = 'custom';
       io.to(roomId).emit('room_settings_changed', room.settings);
       store.markDirty();
+      res.json({ url });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Musique perso envoyée par un joueur. Tout membre peut envoyer : pour un
+  // invité, le fichier sert ensuite à une proposition que l'hôte accepte ou non.
+  app.post('/api/rooms/:id/music', (req, res) => {
+    const roomId = R.cleanRoomId(req.params.id);
+    const room = db[roomId];
+    if (!room) return res.status(404).json({ error: 'Partie introuvable' });
+    const clientId = R.cleanClientId(req.body?.clientId);
+    const member = clientId && room.members[clientId];
+    if (!R.isActiveMember(member)) return res.status(403).json({ error: 'Rejoins la partie pour envoyer une musique.' });
+    if (rateLimited(`music:${req.ip}`, 20)) return res.status(429).json({ error: 'Trop d’envois en peu de temps : réessaie dans un moment.' });
+    try {
+      const url = audio.save(req.body?.audio, `${roomId}-music`);
+      // `apply` (hôte) : la musique devient tout de suite celle de la partie
+      // (musique choisie à l'accueil, envoyée juste après la création).
+      if (req.body?.apply && R.isStaffRole(member.role)) {
+        const customMusic = R.sanitizeCustomMusic({ kind: 'file', url, name: req.body?.name });
+        applySettings(roomId, { music: 'custom', customMusic }, member);
+      }
       res.json({ url });
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -1122,7 +1142,7 @@ function createPuzzleServer({
         return;
       }
       const wanted = C.FOCUS_SIZES.includes(size) ? size : 50;
-      const effective = Math.min(wanted, Math.max(4, Math.floor(room.cols * room.rows * 0.6)));
+      const effective = Math.min(wanted, Math.max(4, Math.floor(Object.keys(room.pieces).length * 0.6)));
       const focus = F.startFocus(room, clientId, member.memberId, effective, aspect, { blocked: new Set(r.held.keys()) });
       if (!focus) { socket.emit('focus_error', { reason: 'no_area' }); return; }
       clearHintsForPieces(ctx.roomId, new Set(focus.pieceIds), 'focus');

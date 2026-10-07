@@ -7,8 +7,9 @@ import ModelPreview from './components/ModelPreview';
 import { FocusBar, FocusLauncher } from './components/FocusHud';
 import {
   HomeIcon, SettingsIcon, HelpIcon, TargetIcon, UsersIcon, CrownIcon, ClockIcon, CloseIcon, CheckIcon,
-  FocusIcon, ImageIcon, EdgesIcon, BroomIcon, KeyboardIcon, CopyIcon, UserMinusIcon, TrophyIcon, EyeIcon, BugIcon,
+  FocusIcon, ImageIcon, EdgesIcon, BroomIcon, KeyboardIcon, CopyIcon, LinkIcon, UserMinusIcon, TrophyIcon, EyeIcon, EyeOffIcon, BugIcon,
 } from './icons';
+import { copyText } from './clipboard';
 
 function formatElapsed(totalMs) {
   const s = Math.max(0, Math.floor((totalMs || 0) / 1000));
@@ -29,6 +30,7 @@ const SHORTCUTS = [
   ['Espace (maintenu)', "Coup d'œil sur la grande room pendant un focus"],
   ['M', 'Afficher / masquer le modèle'],
   ['B', 'Demander des pièces de bord'],
+  ['C', "Mode clair : ne garder que les pièces à l'écran"],
   ['Alt + clic', 'Ping visible par tout le monde'],
   ['Échap', 'Annuler / fermer'],
   ['?', 'Cette aide'],
@@ -57,7 +59,7 @@ export default function PuzzleBoard({
   socket, room, roomSettings, roomName, players, members, myMemberId, myRole,
   profile, prefs, updatePersonal, updatePrefs,
   onChangeSetting, pendingSettingKeys,
-  onRename, onUploadBackground,
+  onRename, onUploadBackground, onUploadMusic,
   onKick, onUnban, onSetRole,
   onHome, connected, onToast,
 }) {
@@ -87,7 +89,9 @@ export default function PuzzleBoard({
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [kickTarget, setKickTarget] = useState(null);
   const [lastPlaced, setLastPlaced] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState(null); // 'link' | 'code'
+  const [cleanMode, setCleanMode] = useState(false); // mode clair : plus que les pièces
+  const cleanHintShown = useRef(false);
   const [elapsedBase, setElapsedBase] = useState(() => ({ ms: room.elapsedMs || 0, at: Date.now() }));
   const [now, setNow] = useState(() => Date.now());
   const [stats, setStats] = useState(null);
@@ -151,6 +155,7 @@ export default function PuzzleBoard({
   useEffect(() => { engineRef.current?.setProfile(profile); }, [profile]);
   useEffect(() => { engineRef.current?.setPrefs(prefs); }, [prefs]);
   useEffect(() => { engineRef.current?.freezeInput(!connected); }, [connected]);
+  useEffect(() => { engineRef.current?.setHudHidden(cleanMode); }, [cleanMode]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -180,17 +185,31 @@ export default function PuzzleBoard({
     else e.cancelEdges();
   }, [edges.status]);
 
+  // Mode clair : tout le HUD disparaît (la musique continue) ; C, Échap ou
+  // le petit œil en haut à droite le font revenir.
+  const toggleClean = useCallback(() => {
+    if (!cleanMode && !cleanHintShown.current) {
+      cleanHintShown.current = true;
+      onToastRef.current?.({ text: "Mode clair : appuie sur C ou Échap pour réafficher l'interface.", duration: 3200 });
+    }
+    setCleanMode(!cleanMode);
+    setMusicOpen(false);
+    setFocusMenu(false);
+  }, [cleanMode]);
+
   const startFocus = (size) => {
     setFocusMenu(false);
     engine()?.startFocus(size);
   };
 
-  const copyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(roomId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* presse-papier refusé */ }
+  // Lien d'invitation : il part de l'adresse par laquelle on joue, donc il
+  // est déjà bon pour les autres (localhost, wifi, Tailscale ou domaine).
+  const inviteUrl = `${window.location.origin}/?partie=${roomId}`;
+  const copy = async (what) => {
+    if (await copyText(what === 'link' ? inviteUrl : roomId)) {
+      setCopied(what);
+      setTimeout(() => setCopied(null), 1600);
+    }
   };
 
   const modalOpen = settingsTab !== null || shortcutsOpen || kickTarget !== null || (completed && endOpen);
@@ -205,9 +224,11 @@ export default function PuzzleBoard({
       if (e.repeat || e.ctrlKey || e.metaKey) return;
       if (e.key === 'Escape') {
         if (shortcutsOpen) setShortcutsOpen(false);
+        else if (musicOpen) setMusicOpen(false);
         else if (focusMenu) setFocusMenu(false);
         else if (hint.status === 'picking' || hint.status === 'pending') e2.cancelHint();
         else if (edges.status !== 'idle') e2.cancelEdges();
+        else if (cleanMode) setCleanMode(false);
         return;
       }
       if (modalOpen) return;
@@ -217,6 +238,7 @@ export default function PuzzleBoard({
         case 'f': if (!focus.active) setFocusMenu((v) => !v); break;
         case 'm': updatePrefs({ showModel: !prefs.showModel }); break;
         case 'b': toggleEdges(); break;
+        case 'c': toggleClean(); break;
         case '?': setShortcutsOpen((v) => !v); break;
         default: break;
       }
@@ -230,14 +252,19 @@ export default function PuzzleBoard({
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [edges.status, focus.active, focusMenu, hint.status, loading, modalOpen, prefs.showModel, shortcutsOpen, toggleEdges, toggleHint, updatePrefs]);
+  }, [cleanMode, edges.status, focus.active, focusMenu, hint.status, loading, modalOpen, musicOpen, prefs.showModel, shortcutsOpen, toggleClean, toggleEdges, toggleHint, updatePrefs]);
 
   const isStaff = myRole === 'host' || myRole === 'cohost';
-  const totalPieces = room.cols * room.rows;
+  const totalPieces = Object.keys(room.pieces).length;
   const placedCount = Object.values(counts).reduce((a, b) => a + b, 0);
   const elapsedMs = completed ? completed.elapsedMs : elapsedBase.ms + (now - elapsedBase.at);
   const followName = followId ? players.find((p) => p.socketId === followId)?.pseudo : null;
   const helpDisabled = hint.status === 'idle' && !hintAvail.available;
+  const edgesTitle = {
+    idle: 'Demander des pièces de bord à ton coéquipier (B)',
+    pending: 'Demande envoyée… (clic pour annuler)',
+    shown: 'Masquer les pièces de bord (B)',
+  }[edges.status];
 
   return (
     <>
@@ -267,108 +294,126 @@ export default function PuzzleBoard({
         </div>
       )}
 
-      {/* HUD gauche */}
-      <div className="hud-chip" style={{ position: 'fixed', top: 18, left: 18, zIndex: 50, maxWidth: 'calc(50vw - 40px)' }}>
-        <div className="hud-title" title={roomName}>{roomName}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span>Code <b style={{ color: 'var(--accent)', userSelect: 'all' }}>{roomId}</b></span>
-          <button className="btn btn-ghost btn-xs" onClick={copyCode} title="Copier le code">{copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}</button>
-          <span>· {placedCount}/{totalPieces} pièces</span>
-        </div>
-        <div style={{ display: 'flex', gap: 14, color: 'var(--text-secondary)', marginTop: 2 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} title="Temps de jeu (seulement quand quelqu'un est connecté)">
-            <ClockIcon size={13} /> {formatElapsed(elapsedMs)}
-          </span>
-          <span>{formatClock(now)}</span>
-        </div>
-      </div>
+      {/* HUD : masqué en mode clair */}
+      {!cleanMode && (
+        <>
+          {/* HUD gauche */}
+          <div className="hud-chip" style={{ position: 'fixed', top: 18, left: 18, zIndex: 50, maxWidth: 'calc(50vw - 40px)' }}>
+            <div className="hud-title" title={roomName}>{roomName}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>Code <b style={{ color: 'var(--accent)', userSelect: 'all' }}>{roomId}</b></span>
+              <button className="btn btn-ghost btn-xs" onClick={() => copy('code')} title="Copier le code">
+                {copied === 'code' ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </button>
+              <button className="btn btn-ghost btn-xs" onClick={() => copy('link')} title={`Copier le lien d'invitation (${inviteUrl})`}>
+                {copied === 'link' ? <><CheckIcon size={12} /> Lien copié</> : <><LinkIcon size={12} /> Lien</>}
+              </button>
+              <span>· {placedCount}/{totalPieces} pièces</span>
+            </div>
+            <div style={{ display: 'flex', gap: 14, color: 'var(--text-secondary)', marginTop: 2 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }} title="Temps de jeu (seulement quand quelqu'un est connecté)">
+                <ClockIcon size={13} /> {formatElapsed(elapsedMs)}
+              </span>
+              <span>{formatClock(now)}</span>
+            </div>
+          </div>
 
-      {/* HUD joueurs */}
-      <div className="hud-chip players-chip">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 8 }}>
-          <UsersIcon size={14} /> Joueurs
-        </div>
-        {players.map((p) => {
-          const isMe = p.socketId === socket.id;
-          const canKick = isStaff && !isMe && p.role !== 'host' && !(myRole === 'cohost' && p.role === 'cohost');
-          return (
-            <div
-              key={p.socketId}
-              className={`player-row ${isMe ? '' : 'clickable'} ${followId === p.socketId ? 'following' : ''}`}
-              onClick={() => !isMe && engine()?.goToPlayer(p.socketId)}
-              onDoubleClick={() => !isMe && engine()?.followPlayer(p.socketId)}
-              title={isMe ? '' : 'Clic : aller à son curseur · Double-clic : le suivre'}
-            >
-              <span className="dot" style={{ background: p.color }} />
-              <span className="player-name">{p.pseudo}{isMe ? ' (toi)' : ''}</span>
-              {p.role === 'host' && <span style={{ color: 'var(--warning)', display: 'inline-flex' }} title="Hôte"><CrownIcon size={12} /></span>}
-              {p.role === 'cohost' && <span className="badge badge-tiny">co</span>}
-              {p.inFocus && <span title="En focus" style={{ display: 'inline-flex', color: 'var(--accent)' }}><FocusIcon size={12} /></span>}
-              <span style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }}>{counts[p.memberId] || 0}</span>
-              {canKick && (
-                <button className="kick-btn" title={`Exclure ${p.pseudo}`} onClick={(e) => { e.stopPropagation(); setKickTarget(p); }}>
-                  <UserMinusIcon size={13} />
+          {/* HUD joueurs */}
+          <div className="hud-chip players-chip">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 8 }}>
+              <UsersIcon size={14} /> Joueurs
+            </div>
+            {players.map((p) => {
+              const isMe = p.socketId === socket.id;
+              const canKick = isStaff && !isMe && p.role !== 'host' && !(myRole === 'cohost' && p.role === 'cohost');
+              return (
+                <div
+                  key={p.socketId}
+                  className={`player-row ${isMe ? '' : 'clickable'} ${followId === p.socketId ? 'following' : ''}`}
+                  onClick={() => !isMe && engine()?.goToPlayer(p.socketId)}
+                  onDoubleClick={() => !isMe && engine()?.followPlayer(p.socketId)}
+                  title={isMe ? '' : 'Clic : aller à son curseur · Double-clic : le suivre'}
+                >
+                  <span className="dot" style={{ background: p.color }} />
+                  <span className="player-name">{p.pseudo}{isMe ? ' (toi)' : ''}</span>
+                  {p.role === 'host' && <span style={{ color: 'var(--warning)', display: 'inline-flex' }} title="Hôte"><CrownIcon size={12} /></span>}
+                  {p.role === 'cohost' && <span className="badge badge-tiny">co</span>}
+                  {p.inFocus && <span title="En focus" style={{ display: 'inline-flex', color: 'var(--accent)' }}><FocusIcon size={12} /></span>}
+                  <span style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }}>{counts[p.memberId] || 0}</span>
+                  {canKick && (
+                    <button className="kick-btn" title={`Exclure ${p.pseudo}`} onClick={(e) => { e.stopPropagation(); setKickTarget(p); }}>
+                      <UserMinusIcon size={13} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <FocusBar state={focus} onPeek={(v) => engine()?.setFocusPeek(v)} onQuit={() => engine()?.quitFocus()} />
+
+          {followName && (
+            <div className="hud-chip follow-chip">
+              <EyeIcon size={14} /> Tu suis {followName}
+              <button className="btn btn-ghost btn-xs" onClick={() => engine()?.stopFollow()}>Arrêter</button>
+            </div>
+          )}
+
+          {busy && <div className="hud-chip busy-chip"><span className="spinner" style={{ width: 12, height: 12 }} /> Mise à jour des pièces…</div>}
+
+          {/* Barre d'actions */}
+          <div className="action-bar">
+            {hint.status === 'idle' && (
+              <button className="btn btn-secondary" disabled={helpDisabled} title={helpDisabled ? hintAvail.reason : "Demander de l'aide (H)"} onClick={toggleHint}>
+                <HelpIcon size={16} /> Demander de l'aide
+              </button>
+            )}
+            {hint.status === 'picking' && <div className="hud-chip">Choisis la case de la pièce qui te manque…</div>}
+            {hint.status === 'pending' && <div className="hud-chip" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="spinner" /> En attente de ton coéquipier…</div>}
+            {hint.status === 'granted' && hint.level < 3 && (
+              <button className="btn btn-secondary" onClick={() => engine()?.requestMoreHint()}><HelpIcon size={16} /> Indice supplémentaire</button>
+            )}
+            {hint.status !== 'idle' && (
+              <button className="btn btn-ghost btn-sm" onClick={() => engine()?.cancelHint()}><CloseIcon size={13} /> {hint.status === 'granted' ? 'Masquer' : 'Annuler'}</button>
+            )}
+            {edges.status === 'pending' && hint.status === 'idle' && (
+              <div className="hud-chip" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="spinner" /> Pièces de bord demandées…</div>
+            )}
+
+            {!focus.active && (
+              <div style={{ position: 'relative' }}>
+                <button className="btn btn-secondary" onClick={() => setFocusMenu((v) => !v)} disabled={!!completed} title="Focus sur une zone (F)">
+                  <FocusIcon size={16} /> Focus
                 </button>
+                <FocusLauncher open={focusMenu} onClose={() => setFocusMenu(false)} onStart={startFocus} starting={focus.starting} totalPieces={totalPieces} />
+              </div>
+            )}
+
+            <div className="toolbar">
+              <button className="btn btn-icon btn-icon-sm" onClick={() => engine()?.fitView()} title="Recentrer (R)"><TargetIcon size={16} /></button>
+              <button className={`btn btn-icon btn-icon-sm ${prefs.showModel ? 'pressed' : ''}`} onClick={() => updatePrefs({ showModel: !prefs.showModel })} title="Image modèle (M)"><ImageIcon size={16} /></button>
+              <button className={`btn btn-icon btn-icon-sm ${edges.status !== 'idle' ? 'pressed' : ''}`} onClick={toggleEdges} disabled={!!completed} title={edgesTitle}>
+                {edges.status === 'pending' ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <EdgesIcon size={16} />}
+              </button>
+              {!focus.active && (
+                <button className="btn btn-icon btn-icon-sm" onClick={() => engine()?.tidyTable()} title="Ranger la table : redisperse les pièces seules"><BroomIcon size={16} /></button>
+              )}
+              <button className="btn btn-icon btn-icon-sm" onClick={toggleClean} title="Mode clair : ne garder que les pièces (C)"><EyeOffIcon size={16} /></button>
+              <button className="btn btn-icon btn-icon-sm" onClick={() => setShortcutsOpen(true)} title="Raccourcis (?)"><KeyboardIcon size={16} /></button>
+              {completed && !endOpen && (
+                <button className="btn btn-icon btn-icon-sm" onClick={() => setEndOpen(true)} title="Résultats"><TrophyIcon size={16} /></button>
               )}
             </div>
-          );
-        })}
-      </div>
-
-      <FocusBar state={focus} onPeek={(v) => engine()?.setFocusPeek(v)} onQuit={() => engine()?.quitFocus()} />
-
-      {followName && (
-        <div className="hud-chip follow-chip">
-          <EyeIcon size={14} /> Tu suis {followName}
-          <button className="btn btn-ghost btn-xs" onClick={() => engine()?.stopFollow()}>Arrêter</button>
-        </div>
-      )}
-
-      {busy && <div className="hud-chip busy-chip"><span className="spinner" style={{ width: 12, height: 12 }} /> Mise à jour des pièces…</div>}
-
-      {/* Barre d'actions */}
-      <div className="action-bar">
-        {hint.status === 'idle' && (
-          <button className="btn btn-secondary" disabled={helpDisabled} title={helpDisabled ? hintAvail.reason : "Demander de l'aide (H)"} onClick={toggleHint}>
-            <HelpIcon size={16} /> Demander de l'aide
-          </button>
-        )}
-        {hint.status === 'picking' && <div className="hud-chip">Choisis la case de la pièce qui te manque…</div>}
-        {hint.status === 'pending' && <div className="hud-chip" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="spinner" /> En attente de ton coéquipier…</div>}
-        {hint.status === 'granted' && hint.level < 3 && (
-          <button className="btn btn-secondary" onClick={() => engine()?.requestMoreHint()}><HelpIcon size={16} /> Indice supplémentaire</button>
-        )}
-        {hint.status !== 'idle' && (
-          <button className="btn btn-ghost btn-sm" onClick={() => engine()?.cancelHint()}><CloseIcon size={13} /> {hint.status === 'granted' ? 'Masquer' : 'Annuler'}</button>
-        )}
-
-        {!focus.active && (
-          <div style={{ position: 'relative' }}>
-            <button className="btn btn-secondary" onClick={() => setFocusMenu((v) => !v)} disabled={!!completed} title="Focus sur une zone (F)">
-              <FocusIcon size={16} /> Focus
-            </button>
-            <FocusLauncher open={focusMenu} onClose={() => setFocusMenu(false)} onStart={startFocus} starting={focus.starting} totalPieces={totalPieces} />
           </div>
-        )}
-
-        <div className="toolbar">
-          <button className="btn btn-icon btn-icon-sm" onClick={() => engine()?.fitView()} title="Recentrer (R)"><TargetIcon size={16} /></button>
-          <button className={`btn btn-icon btn-icon-sm ${prefs.showModel ? 'pressed' : ''}`} onClick={() => updatePrefs({ showModel: !prefs.showModel })} title="Image modèle (M)"><ImageIcon size={16} /></button>
-          <button className={`btn btn-icon btn-icon-sm ${prefs.edgesOnly ? 'pressed' : ''}`} onClick={() => updatePrefs({ edgesOnly: !prefs.edgesOnly })} title="Bords uniquement (B)"><EdgesIcon size={16} /></button>
-          {!focus.active && (
-            <button className="btn btn-icon btn-icon-sm" onClick={() => engine()?.tidyTable()} title="Ranger la table : redisperse les pièces seules"><BroomIcon size={16} /></button>
-          )}
-          <button className="btn btn-icon btn-icon-sm" onClick={() => setShortcutsOpen(true)} title="Raccourcis (?)"><KeyboardIcon size={16} /></button>
-          {completed && !endOpen && (
-            <button className="btn btn-icon btn-icon-sm" onClick={() => setEndOpen(true)} title="Résultats"><TrophyIcon size={16} /></button>
-          )}
-        </div>
-      </div>
+        </>
+      )}
 
       {/* Actions bas-droite */}
       <MusicWidget
-        trackId={roomSettings?.music || 'none'}
-        onChangeTrack={(id) => onChangeSetting({ music: id })}
+        musicId={roomSettings?.music || 'none'}
+        customMusic={roomSettings?.customMusic || null}
+        onSelect={onChangeSetting}
+        onUpload={onUploadMusic}
         editable={isStaff || !!roomSettings?.guestsCanEdit}
         requestOnly={!isStaff && !roomSettings?.guestsCanEdit}
         pending={pendingSettingKeys.has('music')}
@@ -376,15 +421,29 @@ export default function PuzzleBoard({
         muted={prefs.musicMuted}
         onVolume={(v) => updatePrefs({ musicVolume: v })}
         onMute={(m) => updatePrefs({ musicMuted: m })}
+        open={musicOpen}
+        onOpenChange={setMusicOpen}
+        hidden={cleanMode}
       />
-      <button className="btn btn-icon" style={{ position: 'fixed', bottom: 78, right: 20, zIndex: 150 }} onClick={() => setSettingsTab('perso')} title="Réglages">
-        <SettingsIcon size={18} />
-      </button>
-      <button className="btn btn-icon" style={{ position: 'fixed', bottom: 136, right: 20, zIndex: 150 }} onClick={onHome} title="Retour à l'accueil">
-        <HomeIcon size={18} />
-      </button>
+      {/* Masqués pendant que le panneau du son est ouvert : il les recouvrirait. */}
+      {!musicOpen && !cleanMode && (
+        <>
+          <button className="btn btn-icon" style={{ position: 'fixed', bottom: 78, right: 20, zIndex: 150 }} onClick={() => setSettingsTab('perso')} title="Réglages">
+            <SettingsIcon size={18} />
+          </button>
+          <button className="btn btn-icon" style={{ position: 'fixed', bottom: 136, right: 20, zIndex: 150 }} onClick={onHome} title="Retour à l'accueil">
+            <HomeIcon size={18} />
+          </button>
+        </>
+      )}
 
-      {lastPlaced && (
+      {cleanMode && (
+        <button className="btn btn-icon clean-exit" onClick={toggleClean} title="Réafficher l'interface (C)" aria-label="Réafficher l'interface">
+          <EyeIcon size={18} />
+        </button>
+      )}
+
+      {lastPlaced && !cleanMode && (
         <div className="toast toast-success placed-toast">
           <CheckIcon size={15} /> {lastPlaced} a placé une pièce
         </div>
@@ -399,7 +458,7 @@ export default function PuzzleBoard({
         />
       )}
 
-      {debug && stats && (
+      {debug && stats && !cleanMode && (
         <div className="hud-chip debug-chip">
           <BugIcon size={13} /> {stats.rendersPerSecond} rendus/s · {stats.pieces} pièces · atlas {stats.pages}×{stats.pageSize}px · k={stats.k} · cuisson {stats.bakeMs} ms · {stats.quality} · résolution {stats.resolution}
         </div>

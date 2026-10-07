@@ -7,3 +7,6 @@ data/database.json
 data/database.bak.json
 database.json.ancienne-version
 data/uploads/
+data/database.corrupt-*.json
+data/*.tmp
+data/archive-*/

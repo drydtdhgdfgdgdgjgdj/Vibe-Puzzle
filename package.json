@@ -5,7 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test \"tests/*.test.js\""
+    "jouer": "powershell -ExecutionPolicy Bypass -File scripts/demarrer-serveur.ps1",
+    "build": "cd puzzle-frontend && npm ci && npm run build",
+    "test": "node --test \"tests/*.test.js\"",
+    "vider-parties": "node scripts/vider-parties.js"
   },
   "keywords": [],
   "author": "",
@@ -16,5 +19,8 @@
     "express": "^5.2.1",
     "mongoose": "^9.10.3",
     "socket.io": "^4.8.4"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -1,0 +1,37 @@
+# Caddy : HTTPS automatique (certificat Let's Encrypt renouvelé tout seul)
+# et relais vers le jeu, temps réel (WebSocket) compris.
+# Remplace ton-domaine.me par ton vrai domaine (3 endroits), puis :
+#   sudo cp deploiement/Caddyfile /etc/caddy/Caddyfile
+#   sudo nano /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+# En-têtes de sécurité standards (note A sur securityheaders.com).
+(securite) {
+	header {
+		# Le navigateur n'utilisera plus que HTTPS pour ce site pendant 1 an.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Personne ne peut afficher le jeu dans une page à lui (anti-clickjacking).
+		X-Frame-Options "SAMEORIGIN"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+	}
+}
+
+ton-domaine.me {
+	import securite
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3001
+	log {
+		output file /var/log/caddy/puzzle.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
+
+www.ton-domaine.me {
+	import securite
+	redir https://ton-domaine.me{uri} permanent
+}

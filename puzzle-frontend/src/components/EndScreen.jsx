@@ -17,7 +17,7 @@ function formatDuration(totalMs) {
 export default function EndScreen({ room, counts, members, elapsedMs, onHome, onClose }) {
   const [downloading, setDownloading] = useState(null);
   const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  const total = room.cols * room.rows;
+  const total = Object.keys(room.pieces).length;
 
   const handleDownload = async (kind) => {
     setDownloading(kind);

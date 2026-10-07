@@ -5,7 +5,8 @@
 //  1. en mode accroché, si le groupe est assez près de sa vraie
 //     place, il se fixe dans le cadre ;
 //  2. sinon, si une pièce du groupe est assez bien alignée avec une
-//     voisine (dans la grille du puzzle), le groupe s'y colle ;
+//     voisine (une pièce qui la touche dans le puzzle fini), le groupe
+//     s'y colle ;
 //  3. puis tout autre groupe qui se retrouve aligné avec le groupe
 //     déplacé est fusionné aussi (multi-fusion) : sans ça, deux
 //     morceaux visuellement assemblés pourraient rester séparés et la
@@ -13,23 +14,21 @@
 // Les seuils sont proportionnels à la taille des pièces.
 // ============================================================
 
-export const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-
-export function snapThresholds(pw, ph) {
-  const u = Math.min(pw, ph);
-  return { frame: u * 0.3, neighbor: u * 0.25 };
+// `unit` : taille typique d'une pièce.
+export function snapThresholds(unit) {
+  return { frame: unit * 0.3, neighbor: unit * 0.25 };
 }
 
 /**
  * @param moving       [{ p, x, y }] pièces du groupe déplacé et leur position proposée
  * @param movingGroupId groupe déplacé
  * @param lockedGroupId groupe "fixé dans le cadre" (null en mode libre)
- * @param neighborOf   (p, dc, dr) => pièce voisine dans la grille, ou null
+ * @param neighborsOf  (p) => pièces qui touchent p dans le puzzle fini
  * @param isAvailable  (q) => la pièce peut-elle servir d'appui (ni cachée, ni tenue)
  * @param groupAvailable (groupId) => le groupe peut-il être fusionné
  * @returns null | { dx, dy, groupId, locked, merges: [{ groupId, dx, dy }] }
  */
-export function computeSnap({ moving, movingGroupId, lockedGroupId, neighborOf, isAvailable, groupAvailable, thresholds }) {
+export function computeSnap({ moving, movingGroupId, lockedGroupId, neighborsOf, isAvailable, groupAvailable, thresholds }) {
   if (!moving.length) return null;
 
   if (lockedGroupId) {
@@ -41,9 +40,8 @@ export function computeSnap({ moving, movingGroupId, lockedGroupId, neighborOf, 
 
   let best = null;
   for (const m of moving) {
-    for (const [dc, dr] of STEPS) {
-      const q = neighborOf(m.p, dc, dr);
-      if (!q || q.groupId === movingGroupId || q.groupId === lockedGroupId || !isAvailable(q)) continue;
+    for (const q of neighborsOf(m.p)) {
+      if (q.groupId === movingGroupId || q.groupId === lockedGroupId || !isAvailable(q)) continue;
       if (!groupAvailable(q.groupId)) continue;
       const errX = (q.x - m.x) - (q.tx - m.p.tx);
       const errY = (q.y - m.y) - (q.ty - m.p.ty);
@@ -60,9 +58,8 @@ export function computeSnap({ moving, movingGroupId, lockedGroupId, neighborOf, 
   for (const m of moving) {
     const mx = m.x + best.dx;
     const my = m.y + best.dy;
-    for (const [dc, dr] of STEPS) {
-      const q = neighborOf(m.p, dc, dr);
-      if (!q || q.groupId === movingGroupId || merged.has(q.groupId) || q.groupId === lockedGroupId || !isAvailable(q)) continue;
+    for (const q of neighborsOf(m.p)) {
+      if (q.groupId === movingGroupId || merged.has(q.groupId) || q.groupId === lockedGroupId || !isAvailable(q)) continue;
       if (!groupAvailable(q.groupId)) continue;
       const errX = (q.x - mx) - (q.tx - m.p.tx);
       const errY = (q.y - my) - (q.ty - m.p.ty);
@@ -75,12 +72,13 @@ export function computeSnap({ moving, movingGroupId, lockedGroupId, neighborOf, 
   return { dx: best.dx, dy: best.dy, groupId: best.groupId, locked: false, merges };
 }
 
-// Décalage à appliquer pour que le groupe reste dans les limites de la table.
-export function clampIntoBounds(moving, bounds, metrics) {
+// Décalage à appliquer pour que le groupe reste dans les limites de la table
+// (m.p.w × m.p.h : taille de chaque pièce).
+export function clampIntoBounds(moving, bounds) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const m of moving) {
     x0 = Math.min(x0, m.x); y0 = Math.min(y0, m.y);
-    x1 = Math.max(x1, m.x + metrics.pw); y1 = Math.max(y1, m.y + metrics.ph);
+    x1 = Math.max(x1, m.x + m.p.w); y1 = Math.max(y1, m.y + m.p.h);
   }
   let dx = 0;
   let dy = 0;

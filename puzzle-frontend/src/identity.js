@@ -75,12 +75,18 @@ export const DEFAULT_PREFS = {
   cursorScale: 1, // taille de tous les curseurs à l'écran (pour soi seulement)
   showModel: false,
   modelSize: 'm',
+  pieceCut: 'classic', // forme des pièces choisie à la création d'une partie
 };
 
 export function getPrefs() {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    return { ...DEFAULT_PREFS, ...(raw ? JSON.parse(raw) : {}) };
+    const prefs = { ...DEFAULT_PREFS, ...(raw ? JSON.parse(raw) : {}) };
+    // Le modèle en taille XL n'existe plus : L est la plus grande.
+    if (!['s', 'm', 'l'].includes(prefs.modelSize)) prefs.modelSize = prefs.modelSize === 'xl' ? 'l' : 'm';
+    delete prefs.edgesOnly; // ancien bouton "bords uniquement", remplacé par la demande de bords
+    if (!['classic', 'magic'].includes(prefs.pieceCut)) prefs.pieceCut = 'classic';
+    return prefs;
   } catch {
     return { ...DEFAULT_PREFS };
   }
